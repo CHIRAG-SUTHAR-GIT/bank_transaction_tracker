@@ -1,0 +1,862 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Transaction Flow Diagram</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #f5f7fa 0%, #c3cfe2 100%);
+            padding: 20px;
+            min-height: 100vh;
+        }
+
+        .header {
+            background: white;
+            padding: 20px;
+            border-radius: 10px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+            margin-bottom: 20px;
+        }
+
+        .header h1 {
+            color: #2c3e50;
+            margin-bottom: 15px;
+        }
+
+        .controls {
+            display: flex;
+            gap: 15px;
+            align-items: center;
+            flex-wrap: wrap;
+        }
+
+        .controls select, .controls button {
+            padding: 10px 20px;
+            border: 2px solid #3498db;
+            border-radius: 5px;
+            font-size: 14px;
+            cursor: pointer;
+            transition: all 0.3s;
+        }
+
+        .controls select {
+            min-width: 300px;
+            background: white;
+        }
+
+        .controls button {
+            background: #3498db;
+            color: white;
+            font-weight: bold;
+        }
+
+        .controls button:hover {
+            background: #2980b9;
+            transform: translateY(-2px);
+            box-shadow: 0 4px 8px rgba(0,0,0,0.2);
+        }
+
+        .legend {
+            display: flex;
+            gap: 20px;
+            margin-top: 15px;
+            flex-wrap: wrap;
+        }
+
+        .legend-item {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-size: 13px;
+        }
+
+        .legend-box {
+            width: 30px;
+            height: 20px;
+            border-radius: 4px;
+            border: 2px solid #999;
+        }
+
+        .diagram-container {
+            background: white;
+            padding: 40px;
+            border-radius: 10px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+            overflow-x: auto;
+            min-height: 500px;
+        }
+
+        .flow-diagram {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 30px;
+            padding: 20px;
+        }
+
+        .layer-section {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            width: 100%;
+        }
+
+        .layer-title {
+            font-size: 14px;
+            color: #7f8c8d;
+            margin-bottom: 15px;
+            font-weight: 600;
+            text-align: center;
+        }
+
+        .layer-nodes {
+            display: flex;
+            justify-content: center;
+            gap: 20px;
+            flex-wrap: wrap;
+            max-width: 1200px;
+        }
+
+        .node {
+            background: #fff3e0;
+            border: 2px solid #ff9800;
+            border-radius: 8px;
+            padding: 12px 16px;
+            min-width: 180px;
+            max-width: 250px;
+            cursor: pointer;
+            transition: all 0.3s;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+        }
+
+        .node:hover {
+            transform: translateY(-5px);
+            box-shadow: 0 5px 15px rgba(0,0,0,0.2);
+        }
+
+        .node.victim {
+            background: #ffebee;
+            border-color: #e57373;
+        }
+
+        .node.intermediate {
+            background: #fff3e0;
+            border-color: #ffb74d;
+        }
+
+        .node.cashout-atm {
+            background: #ffcdd2;
+            border-color: #ef5350;
+        }
+
+        .node.cashout-cheque {
+            background: #f8bbd0;
+            border-color: #ec407a;
+        }
+
+        .node.cashout-pos {
+            background: #fce4ec;
+            border-color: #f06292;
+        }
+
+        .node.frozen {
+            background: #c8e6c9;
+            border-color: #66bb6a;
+        }
+
+        .node.others {
+            background: #e1bee7;
+            border-color: #ab47bc;
+        }
+
+        .node-bank {
+            font-weight: bold;
+            color: #2c3e50;
+            margin-bottom: 5px;
+            word-wrap: break-word;
+        }
+
+        .node-account {
+            font-size: 12px;
+            color: #555;
+            margin-bottom: 5px;
+            word-wrap: break-word;
+        }
+
+        .node-amount {
+            font-weight: bold;
+            color: #27ae60;
+            font-size: 14px;
+        }
+
+        .node-extra {
+            font-size: 11px;
+            color: #7f8c8d;
+            margin-top: 5px;
+        }
+
+        .status-indicator {
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+            flex-shrink: 0;
+        }
+
+        .status-indicator.pending {
+            background: #e74c3c;
+        }
+
+        .status-indicator.partial {
+            background: #f39c12;
+        }
+
+        .status-indicator.complete {
+            background: #27ae60;
+        }
+
+        .connector {
+            width: 2px;
+            height: 30px;
+            background: linear-gradient(to bottom, #bdc3c7, #95a5a6);
+            margin: 0 auto;
+        }
+
+        .expand-node {
+            background: #ecf0f1;
+            border: 2px dashed #95a5a6;
+            color: #7f8c8d;
+            font-style: italic;
+            text-align: center;
+        }
+
+        .expand-node:hover {
+            background: #d5dbdb;
+            border-color: #7f8c8d;
+        }
+
+        .cashout-section {
+            margin-top: 40px;
+            width: 100%;
+            max-width: 1200px;
+        }
+
+        .cashout-title {
+            font-size: 18px;
+            font-weight: bold;
+            color: #2c3e50;
+            text-align: center;
+            margin-bottom: 20px;
+            padding: 10px;
+            background: #ecf0f1;
+            border-radius: 5px;
+        }
+
+        .cashout-group {
+            margin-bottom: 30px;
+        }
+
+        .cashout-group-title {
+            font-size: 15px;
+            font-weight: 600;
+            color: #34495e;
+            margin-bottom: 15px;
+            text-align: center;
+        }
+
+        /* Modal Styles */
+        .modal {
+            display: none;
+            position: fixed;
+            z-index: 1000;
+            left: 0;
+            top: 0;
+            width: 100%;
+            height: 100%;
+            background-color: rgba(0,0,0,0.5);
+            animation: fadeIn 0.3s;
+        }
+
+        @keyframes fadeIn {
+            from { opacity: 0; }
+            to { opacity: 1; }
+        }
+
+        .modal-content {
+            background-color: white;
+            margin: 5% auto;
+            padding: 0;
+            border-radius: 10px;
+            width: 90%;
+            max-width: 800px;
+            max-height: 80vh;
+            overflow-y: auto;
+            box-shadow: 0 5px 25px rgba(0,0,0,0.3);
+            animation: slideDown 0.3s;
+        }
+
+        @keyframes slideDown {
+            from {
+                transform: translateY(-50px);
+                opacity: 0;
+            }
+            to {
+                transform: translateY(0);
+                opacity: 1;
+            }
+        }
+
+        .modal-header {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 20px;
+            border-radius: 10px 10px 0 0;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .modal-header h2 {
+            margin: 0;
+            font-size: 20px;
+        }
+
+        .close {
+            color: white;
+            font-size: 28px;
+            font-weight: bold;
+            cursor: pointer;
+            transition: all 0.3s;
+        }
+
+        .close:hover {
+            transform: scale(1.2);
+        }
+
+        .modal-body {
+            padding: 25px;
+        }
+
+        .detail-row {
+            display: flex;
+            padding: 12px;
+            border-bottom: 1px solid #ecf0f1;
+        }
+
+        .detail-row:last-child {
+            border-bottom: none;
+        }
+
+        .detail-row:nth-child(even) {
+            background: #f8f9fa;
+        }
+
+        .detail-label {
+            font-weight: 600;
+            color: #2c3e50;
+            min-width: 180px;
+        }
+
+        .detail-value {
+            color: #555;
+            flex: 1;
+            word-wrap: break-word;
+        }
+
+        .status-badge {
+            display: inline-block;
+            padding: 4px 12px;
+            border-radius: 12px;
+            font-size: 12px;
+            font-weight: bold;
+        }
+
+        .status-complete {
+            background: #d4edda;
+            color: #155724;
+        }
+
+        .status-partial {
+            background: #fff3cd;
+            color: #856404;
+        }
+
+        .status-pending {
+            background: #f8d7da;
+            color: #721c24;
+        }
+
+        .loading {
+            text-align: center;
+            padding: 40px;
+            color: #7f8c8d;
+            font-size: 18px;
+        }
+
+        .error {
+            text-align: center;
+            padding: 40px;
+            color: #e74c3c;
+            font-size: 16px;
+        }
+
+        .summary-box {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 20px;
+            border-radius: 8px;
+            text-align: center;
+            margin-bottom: 30px;
+        }
+
+        .summary-box h3 {
+            margin-bottom: 10px;
+        }
+
+        .summary-box .amount {
+            font-size: 24px;
+            font-weight: bold;
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>🔄 Transaction Flow Diagram</h1>
+        <div class="controls">
+            <select id="transactionSelect">
+                <option value="">Select a Layer 1 Transaction...</option>
+            </select>
+            <button onclick="loadFlowDiagram()">Load Diagram</button>
+            <button onclick="downloadReport()">Download Report</button>
+        </div>
+        <div class="legend">
+            <div class="legend-item">
+                <div class="legend-box" style="background: #ffebee; border-color: #e57373;"></div>
+                <span>Victim / Entry</span>
+            </div>
+            <div class="legend-item">
+                <div class="legend-box" style="background: #fff3e0; border-color: #ffb74d;"></div>
+                <span>Intermediate Transfer</span>
+            </div>
+            <div class="legend-item">
+                <div class="legend-box" style="background: #ffcdd2; border-color: #ef5350;"></div>
+                <span>Cash-out (ATM/Cheque/POS)</span>
+            </div>
+            <div class="legend-item">
+                <div class="legend-box" style="background: #c8e6c9; border-color: #66bb6a;"></div>
+                <span>Hold / Freeze</span>
+            </div>
+        </div>
+        <div class="legend" style="margin-top: 10px; padding-top: 10px; border-top: 1px solid #ddd;">
+            <strong style="margin-right: 10px;">Status:</strong>
+            <div class="legend-item">
+                <div style="width: 12px; height: 12px; border-radius: 50%; background: #e74c3c;"></div>
+                <span>Pending</span>
+            </div>
+            <div class="legend-item">
+                <div style="width: 12px; height: 12px; border-radius: 50%; background: #f39c12;"></div>
+                <span>Partial</span>
+            </div>
+            <div class="legend-item">
+                <div style="width: 12px; height: 12px; border-radius: 50%; background: #27ae60;"></div>
+                <span>Complete</span>
+            </div>
+        </div>
+    </div>
+
+    <div class="diagram-container">
+        <div id="flowDiagram" class="flow-diagram">
+            <div class="loading">Please select a transaction to view the flow diagram</div>
+        </div>
+    </div>
+
+    <!-- Modal -->
+    <div id="detailModal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2>Transaction Details</h2>
+                <span class="close" onclick="closeModal()">&times;</span>
+            </div>
+            <div class="modal-body" id="modalBody">
+                <!-- Details will be loaded here -->
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let flowData = null;
+        let expandedNodes = new Set();
+
+        // Load Layer 1 transactions on page load
+        window.onload = function() {
+            fetch('/api/get_layer1_transactions')
+                .then(response => response.json())
+                .then(data => {
+                    const select = document.getElementById('transactionSelect');
+                    data.transactions.forEach(txn => {
+                        const option = document.createElement('option');
+                        option.value = txn.trans_id;
+                        option.textContent = `${txn.account} - ${txn.bank} - ₹${txn.amount.toLocaleString('en-IN')}`;
+                        select.appendChild(option);
+                    });
+                })
+                .catch(error => {
+                    console.error('Error loading transactions:', error);
+                });
+        };
+
+        function loadFlowDiagram() {
+            const transId = document.getElementById('transactionSelect').value;
+            if (!transId) {
+                alert('Please select a transaction');
+                return;
+            }
+
+            const container = document.getElementById('flowDiagram');
+            container.innerHTML = '<div class="loading">Loading flow diagram...</div>';
+
+            fetch(`/api/get_flow_diagram/${transId}`)
+                .then(response => response.json())
+                .then(data => {
+                    if (data.error) {
+                        container.innerHTML = `<div class="error">${data.error}</div>`;
+                        return;
+                    }
+                    flowData = data;
+                    expandedNodes.clear();
+                    renderFlowDiagram(data);
+                })
+                .catch(error => {
+                    container.innerHTML = `<div class="error">Error loading diagram: ${error.message}</div>`;
+                });
+        }
+
+        function renderFlowDiagram(data) {
+            const container = document.getElementById('flowDiagram');
+            container.innerHTML = '';
+
+            // Summary box
+            const summary = document.createElement('div');
+            summary.className = 'summary-box';
+            summary.innerHTML = `
+                <h3>Total Disputed Amount</h3>
+                <div class="amount">₹${data.total_disputed.toLocaleString('en-IN')}</div>
+                <div style="margin-top: 10px; font-size: 14px;">
+                    Acknowledgement: ${data.ack_no || 'N/A'} | Date: ${data.date || 'N/A'}
+                </div>
+            `;
+            container.appendChild(summary);
+
+            // Render layers
+            data.layers.forEach((layer, index) => {
+                if (layer.nodes.length === 0) return;
+
+                const layerSection = document.createElement('div');
+                layerSection.className = 'layer-section';
+
+                const layerTitle = document.createElement('div');
+                layerTitle.className = 'layer-title';
+                layerTitle.textContent = `LAYER ${layer.layer} — ${layer.description}`;
+                layerSection.appendChild(layerTitle);
+
+                const layerNodes = document.createElement('div');
+                layerNodes.className = 'layer-nodes';
+
+                layer.nodes.forEach(node => {
+                    if (node.is_collapsed && !expandedNodes.has(node.collapse_id)) {
+                        // Show collapsed node
+                        const collapsedNode = createNode(node, true);
+                        layerNodes.appendChild(collapsedNode);
+                    } else if (node.is_collapsed && expandedNodes.has(node.collapse_id)) {
+                        // Show expanded nodes
+                        node.collapsed_items.forEach(item => {
+                            const expandedNode = createNode(item, false);
+                            layerNodes.appendChild(expandedNode);
+                        });
+                    } else {
+                        // Regular node
+                        const nodeEl = createNode(node, false);
+                        layerNodes.appendChild(nodeEl);
+                    }
+                });
+
+                layerSection.appendChild(layerNodes);
+                container.appendChild(layerSection);
+
+                // Add connector if not last layer
+                if (index < data.layers.length - 1) {
+                    const connector = document.createElement('div');
+                    connector.className = 'connector';
+                    container.appendChild(connector);
+                }
+            });
+
+            // Render cash-out section
+            if (data.cashout && Object.keys(data.cashout).length > 0) {
+                const cashoutSection = document.createElement('div');
+                cashoutSection.className = 'cashout-section';
+
+                const cashoutTitle = document.createElement('div');
+                cashoutTitle.className = 'cashout-title';
+                cashoutTitle.textContent = 'CASH-OUT CHANNELS (accounts across Layers 2-' + data.max_layer + ')';
+                cashoutSection.appendChild(cashoutTitle);
+
+                // Render each cash-out type
+                Object.keys(data.cashout).forEach(type => {
+                    const group = data.cashout[type];
+                    if (group.items.length === 0) return;
+
+                    const groupDiv = document.createElement('div');
+                    groupDiv.className = 'cashout-group';
+
+                    const groupTitle = document.createElement('div');
+                    groupTitle.className = 'cashout-group-title';
+                    groupTitle.textContent = `${group.title} — ${group.count} txns · ₹${group.total.toLocaleString('en-IN')} total · ${group.subtitle}`;
+                    groupDiv.appendChild(groupTitle);
+
+                    const groupNodes = document.createElement('div');
+                    groupNodes.className = 'layer-nodes';
+
+                    group.items.forEach(item => {
+                        if (item.is_collapsed && !expandedNodes.has(item.collapse_id)) {
+                            const collapsedNode = createNode(item, true);
+                            groupNodes.appendChild(collapsedNode);
+                        } else if (item.is_collapsed && expandedNodes.has(item.collapse_id)) {
+                            item.collapsed_items.forEach(subItem => {
+                                const expandedNode = createNode(subItem, false);
+                                groupNodes.appendChild(expandedNode);
+                            });
+                        } else {
+                            const nodeEl = createNode(item, false);
+                            groupNodes.appendChild(nodeEl);
+                        }
+                    });
+
+                    groupDiv.appendChild(groupNodes);
+                    cashoutSection.appendChild(groupDiv);
+                });
+
+                container.appendChild(cashoutSection);
+            }
+        }
+
+        function createNode(node, isCollapsed) {
+            const nodeEl = document.createElement('div');
+            nodeEl.className = `node ${node.type}`;
+            
+            if (isCollapsed) {
+                nodeEl.classList.add('expand-node');
+                nodeEl.innerHTML = `
+                    <div class="node-bank">+${node.collapsed_count} more ${node.collapsed_label}</div>
+                    <div class="node-extra">${node.collapsed_preview}</div>
+                `;
+                nodeEl.onclick = () => toggleExpand(node.collapse_id);
+            } else {
+                // Determine status indicator color
+                let statusClass = 'pending';
+                if (node.status) {
+                    statusClass = node.status.toLowerCase();
+                }
+                
+                // Build the node content
+                let contentHTML = '<div style="display: flex; align-items: flex-start; gap: 10px;">';
+                
+                // Add status indicator only for non-cashout nodes
+                if (!node.type.includes('cashout') && node.type !== 'frozen' && node.type !== 'others') {
+                    contentHTML += `<div class="status-indicator ${statusClass}" style="width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0; margin-top: 5px;"></div>`;
+                }
+                
+                contentHTML += '<div style="flex: 1;">';
+                contentHTML += `<div class="node-bank">${node.bank || 'Unknown'}</div>`;
+                contentHTML += `<div class="node-account">${node.account || ''}</div>`;
+                contentHTML += `<div class="node-amount">₹${(node.amount || 0).toLocaleString('en-IN')}</div>`;
+                
+                // Show extra info if available
+                if (node.extra) {
+                    contentHTML += `<div class="node-extra">${node.extra}</div>`;
+                }
+                
+                contentHTML += '</div></div>';
+                
+                nodeEl.innerHTML = contentHTML;
+                nodeEl.onclick = () => showDetails(node);
+            }
+
+            return nodeEl;
+        }
+
+        function toggleExpand(collapseId) {
+            if (expandedNodes.has(collapseId)) {
+                expandedNodes.delete(collapseId);
+            } else {
+                expandedNodes.add(collapseId);
+            }
+            renderFlowDiagram(flowData);
+        }
+
+        function showDetails(node) {
+            const modal = document.getElementById('detailModal');
+            const modalBody = document.getElementById('modalBody');
+            
+            modalBody.innerHTML = '<div class="loading">Loading details...</div>';
+            modal.style.display = 'block';
+
+            // Check if this is a grouped cash-out node
+            if (node.is_grouped && node.grouped_details && node.grouped_details.length > 0) {
+                // Show grouped transaction details
+                let html = '<div style="padding: 10px;">';
+                
+                html += `<div class="detail-row">
+                    <div class="detail-label">Bank:</div>
+                    <div class="detail-value">${node.bank || 'N/A'}</div>
+                </div>`;
+                
+                html += `<div class="detail-row">
+                    <div class="detail-label">Account Number:</div>
+                    <div class="detail-value">${node.account || 'N/A'}</div>
+                </div>`;
+                
+                html += `<div class="detail-row">
+                    <div class="detail-label">Total Amount:</div>
+                    <div class="detail-value" style="font-weight: bold; color: #27ae60;">₹${(node.amount || 0).toLocaleString('en-IN')}</div>
+                </div>`;
+                
+                html += `<div class="detail-row">
+                    <div class="detail-label">Number of Transactions:</div>
+                    <div class="detail-value">${node.grouped_details.length}</div>
+                </div>`;
+                
+                // Show individual transactions
+                html += '<div style="margin-top: 20px; padding-top: 20px; border-top: 2px solid #3498db;">';
+                html += '<h3 style="color: #2c3e50; margin-bottom: 15px;">Individual Transactions:</h3>';
+                
+                node.grouped_details.forEach((detail, index) => {
+                    html += `<div style="background: #f8f9fa; padding: 12px; margin-bottom: 10px; border-radius: 5px; border-left: 4px solid #3498db;">`;
+                    html += `<div style="font-weight: bold; color: #2c3e50; margin-bottom: 5px;">Transaction ${index + 1}</div>`;
+                    
+                    if (detail.trans_id) {
+                        html += `<div style="font-size: 12px; color: #555; margin-bottom: 3px;">ID: ${detail.trans_id}</div>`;
+                    }
+                    
+                    html += `<div style="font-size: 14px; color: #27ae60; font-weight: bold; margin-bottom: 3px;">₹${(detail.amount || 0).toLocaleString('en-IN')}</div>`;
+                    
+                    if (detail.extra) {
+                        html += `<div style="font-size: 12px; color: #7f8c8d;">${detail.extra}</div>`;
+                    }
+                    
+                    html += '</div>';
+                });
+                
+                html += '</div></div>';
+                modalBody.innerHTML = html;
+                return;
+            }
+
+            // Regular transaction details (non-grouped)
+            const transId = node.trans_id;
+            const accountNo = node.account;
+
+            fetch(`/api/get_transaction_details/${transId}?account=${accountNo || ''}`)
+                .then(response => response.json())
+                .then(data => {
+                    if (data.error) {
+                        modalBody.innerHTML = `<div class="error">${data.error}</div>`;
+                        return;
+                    }
+
+                    let html = '';
+                    
+                    // Use node's status if available, otherwise use API status
+                    const displayStatus = node.status || data.status || 'PENDING';
+                    
+                    // Basic details
+                    html += `<div class="detail-row">
+                        <div class="detail-label">Transaction ID:</div>
+                        <div class="detail-value">${data.trans_id || 'N/A'}</div>
+                    </div>`;
+                    
+                    html += `<div class="detail-row">
+                        <div class="detail-label">Debited Account:</div>
+                        <div class="detail-value">${data.debited_account || 'N/A'}</div>
+                    </div>`;
+                    
+                    html += `<div class="detail-row">
+                        <div class="detail-label">Credited Account:</div>
+                        <div class="detail-value">${data.credited_account || 'N/A'}</div>
+                    </div>`;
+                    
+                    html += `<div class="detail-row">
+                        <div class="detail-label">Amount:</div>
+                        <div class="detail-value">₹${(data.amount || 0).toLocaleString('en-IN')}</div>
+                    </div>`;
+                    
+                    html += `<div class="detail-row">
+                        <div class="detail-label">Layer:</div>
+                        <div class="detail-value">${data.layer || 'N/A'}</div>
+                    </div>`;
+                    
+                    html += `<div class="detail-row">
+                        <div class="detail-label">Status:</div>
+                        <div class="detail-value">
+                            <span class="status-badge status-${displayStatus.toLowerCase()}">${displayStatus}</span>
+                        </div>
+                    </div>`;
+                    
+                    if (data.breakdown && data.breakdown.length > 0) {
+                        html += `<div class="detail-row">
+                            <div class="detail-label">Breakdown:</div>
+                            <div class="detail-value">`;
+                        data.breakdown.forEach(item => {
+                            html += `<div style="margin-bottom: 5px;">
+                                ${item.sheet}: ₹${item.amount.toLocaleString('en-IN')}
+                            </div>`;
+                        });
+                        html += `</div></div>`;
+                    }
+                    
+                    html += `<div class="detail-row">
+                        <div class="detail-label">Updated Amount:</div>
+                        <div class="detail-value">₹${(data.updated_amount || 0).toLocaleString('en-IN')}</div>
+                    </div>`;
+                    
+                    html += `<div class="detail-row">
+                        <div class="detail-label">Pending Amount:</div>
+                        <div class="detail-value">₹${(data.pending_amount || 0).toLocaleString('en-IN')}</div>
+                    </div>`;
+
+                    modalBody.innerHTML = html;
+                })
+                .catch(error => {
+                    modalBody.innerHTML = `<div class="error">Error: ${error.message}</div>`;
+                });
+        }
+
+        function closeModal() {
+            document.getElementById('detailModal').style.display = 'none';
+        }
+
+        window.onclick = function(event) {
+            const modal = document.getElementById('detailModal');
+            if (event.target == modal) {
+                modal.style.display = 'none';
+            }
+        };
+
+        function downloadReport() {
+            const transId = document.getElementById('transactionSelect').value;
+            if (!transId) {
+                alert('Please select and load a transaction first');
+                return;
+            }
+            window.location.href = `/download_flow_diagram/${transId}`;
+        }
+    </script>
+</body>
+</html>
