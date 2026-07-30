@@ -36,6 +36,11 @@ def rebuild_maps():
     
     if df_main is not None:
         for idx, row in df_main.iterrows():
+            # FILTER: Skip rows with null/empty credited transaction ID from all maps
+            credited_trans_id_check = str(row.iloc[9]).strip() if pd.notna(row.iloc[9]) else ''
+            if not credited_trans_id_check or credited_trans_id_check.lower() in ('nan', 'none', '', '-', 'null'):
+                continue
+            
             # Account numbers (col 2 and 6)
             deb_acc = str(row.iloc[2]).strip() if pd.notna(row.iloc[2]) else ''
             cre_acc = str(row.iloc[6]).strip() if pd.notna(row.iloc[6]) else ''
@@ -377,6 +382,11 @@ def get_layer_transactions(layer=1, parent_trans_id=None):
     transactions = []
     for _, row in filtered.iterrows():
         child_trans_id = str(row.iloc[9]).strip() if pd.notna(row.iloc[9]) else ''
+        
+        # FILTER: Skip rows with null/empty credited transaction ID
+        if not child_trans_id or child_trans_id.lower() in ('nan', 'none', '', '-', 'null'):
+            continue
+            
         credited_account = str(row.iloc[6]).strip() if pd.notna(row.iloc[6]) else ''
         disputed_amount = clean_amount(row.iloc[11])
         current_layer = int(row.iloc[5]) if pd.notna(row.iloc[5]) else 1
@@ -439,6 +449,10 @@ def build_hierarchical_data(parent_id=None, layer=1, parent_path="", level=0, vi
         # First, group rows by (Debited Account, Credited Account) WITHOUT status to calculate base status
         temp_grouped = {}
         for idx, row in df_main.iterrows():
+            # FILTER: Skip rows with null/empty credited transaction ID
+            credited_trans_id = str(row.iloc[9]).strip() if pd.notna(row.iloc[9]) else ''
+            if not credited_trans_id or credited_trans_id.lower() in ('nan', 'none', '', '-', 'null'):
+                continue
             debited_account = str(row.iloc[2]).strip() if pd.notna(row.iloc[2]) else ''
             credited_account = str(row.iloc[6]).strip() if pd.notna(row.iloc[6]) else ''
             child_trans_id = str(row.iloc[9]).strip() if pd.notna(row.iloc[9]) else ''
@@ -456,7 +470,12 @@ def build_hierarchical_data(parent_id=None, layer=1, parent_path="", level=0, vi
         # Calculate status for each individual row
         row_status_map = {}
         for idx, row in df_main.iterrows():
-            child_trans_id = str(row.iloc[9]).strip() if pd.notna(row.iloc[9]) else ''
+            # FILTER: Skip rows with null/empty credited transaction ID
+            credited_trans_id = str(row.iloc[9]).strip() if pd.notna(row.iloc[9]) else ''
+            if not credited_trans_id or credited_trans_id.lower() in ('nan', 'none', '', '-', 'null'):
+                continue
+                
+            child_trans_id = credited_trans_id
             disputed_amount = clean_amount(row.iloc[11])
             current_layer = int(row.iloc[5]) if pd.notna(row.iloc[5]) else 1
             credited_account = str(row.iloc[6]).strip() if pd.notna(row.iloc[6]) else ''
@@ -482,11 +501,17 @@ def build_hierarchical_data(parent_id=None, layer=1, parent_path="", level=0, vi
             row_status_map[idx] = final_status
         
         # Now group by (Debited Account, Credited Account, Status)
+        # IMPORTANT: Track unique transactions to avoid double-counting duplicates
         grouped_data = {}
         for idx, row in df_main.iterrows():
+            # FILTER: Skip rows with null/empty credited transaction ID
+            credited_trans_id = str(row.iloc[9]).strip() if pd.notna(row.iloc[9]) else ''
+            if not credited_trans_id or credited_trans_id.lower() in ('nan', 'none', '', '-', 'null'):
+                continue
+                
             debited_account = str(row.iloc[2]).strip() if pd.notna(row.iloc[2]) else ''
             credited_account = str(row.iloc[6]).strip() if pd.notna(row.iloc[6]) else ''
-            status = row_status_map[idx]
+            status = row_status_map.get(idx, 'PENDING')  # Use .get() since we might have skipped this row
             
             # Key includes status for proper grouping
             key = (debited_account, credited_account, status)
@@ -497,13 +522,39 @@ def build_hierarchical_data(parent_id=None, layer=1, parent_path="", level=0, vi
                     'rows': [],
                     'total_disputed': 0,
                     'total_transaction': 0,
-                    'status': status
+                    'status': status,
+                    'seen_transactions': set()  # Track unique transaction signatures
                 }
+            
+            # Create a signature for this transaction to detect true duplicates
+            # Match: last 4 digits of account numbers + all other fields
+            debited_trans_id = str(row.iloc[3]).strip() if pd.notna(row.iloc[3]) else ''
+            bank = str(row.iloc[4]).strip() if pd.notna(row.iloc[4]) else ''
+            layer = str(int(row.iloc[5])) if pd.notna(row.iloc[5]) else ''
+            ifsc = str(row.iloc[7]).strip() if pd.notna(row.iloc[7]) else ''
+            trans_date = str(row.iloc[8]).strip() if pd.notna(row.iloc[8]) else ''
+            disputed_amt = clean_amount(row.iloc[11])
+            transaction_amt = clean_amount(row.iloc[10])
+            
+            # Get last 4 digits of account numbers
+            debited_acc_last4 = debited_account[-4:] if len(debited_account) >= 4 else debited_account
+            credited_acc_last4 = credited_account[-4:] if len(credited_account) >= 4 else credited_account
+            
+            # Create signature with last 4 digits of accounts + all other fields
+            trans_signature = f"{debited_acc_last4}|{debited_trans_id}|{bank}|{layer}|{credited_acc_last4}|{ifsc}|{trans_date}|{credited_trans_id}|{transaction_amt}|{disputed_amt}"
+            
+            # Only add amounts if this exact transaction hasn't been seen before
+            # This prevents double-counting true duplicates while allowing multiple
+            # legitimate transactions between the same account pair
+            if trans_signature not in grouped_data[key]['seen_transactions']:
+                grouped_data[key]['seen_transactions'].add(trans_signature)
+                grouped_data[key]['total_disputed'] += disputed_amt
+                grouped_data[key]['total_transaction'] += transaction_amt
+            else:
+                print(f"DEBUG: Skipping duplicate transaction: {trans_signature}")
             
             grouped_data[key]['indices'].append(idx)
             grouped_data[key]['rows'].append(row)
-            grouped_data[key]['total_disputed'] += clean_amount(row.iloc[11])
-            grouped_data[key]['total_transaction'] += clean_amount(row.iloc[10])
         
         # Build parent-child map based on grouped data: Key = Credited Account, Value = list of account pair keys (with status)
         parent_child_map = {}
@@ -807,6 +858,49 @@ def get_min_layer():
     except:
         return jsonify({'min_layer': 1})
 
+@app.route('/api/excluded-records')
+def get_excluded_records():
+    """Get records with null/empty credited transaction ID (excluded from main views)"""
+    if df_main is None:
+        return jsonify({'records': [], 'count': 0, 'total_amount': 0})
+    
+    excluded_records = []
+    total_amount = 0
+    
+    for idx, row in df_main.iterrows():
+        credited_trans_id = str(row.iloc[9]).strip() if pd.notna(row.iloc[9]) else ''
+        
+        # Include only rows with null/empty credited transaction ID
+        if not credited_trans_id or credited_trans_id.lower() in ('nan', 'none', '', '-', 'null'):
+            disputed_amount = clean_amount(row.iloc[11])
+            total_amount += disputed_amount
+            
+            excluded_records.append({
+                's_no': int(row.iloc[0]) if pd.notna(row.iloc[0]) else 0,
+                'acknowledgement_no': str(row.iloc[1]) if pd.notna(row.iloc[1]) else '',
+                'debited_account': str(row.iloc[2]) if pd.notna(row.iloc[2]) else '',
+                'debited_transaction_id': str(row.iloc[3]) if pd.notna(row.iloc[3]) else '',
+                'bank': str(row.iloc[4]) if pd.notna(row.iloc[4]) else '',
+                'layer': int(row.iloc[5]) if pd.notna(row.iloc[5]) else 0,
+                'credited_account': str(row.iloc[6]) if pd.notna(row.iloc[6]) else '',
+                'ifsc_code': str(row.iloc[7]) if pd.notna(row.iloc[7]) else '',
+                'transaction_date': str(row.iloc[8]) if pd.notna(row.iloc[8]) else '',
+                'credited_transaction_id': '',  # Always empty for excluded records
+                'transaction_amount': float(clean_amount(row.iloc[10])),
+                'disputed_amount': float(disputed_amount),
+                'reference_no': str(row.iloc[12]) if pd.notna(row.iloc[12]) else '',
+                'remarks': str(row.iloc[13]) if pd.notna(row.iloc[13]) else '',
+                'action_taken_by': str(row.iloc[14]) if pd.notna(row.iloc[14]) else '',
+                'date_of_action': str(row.iloc[15]) if pd.notna(row.iloc[15]) else ''
+            })
+    
+    return jsonify({
+        'records': excluded_records,
+        'count': len(excluded_records),
+        'total_amount': total_amount
+    })
+
+
 @app.route('/api/other-sheets-total')
 def get_other_sheets_total():
     """Get total amount from all other sheets (ATM, Cheque, POS, Frozen, Others)"""
@@ -1077,8 +1171,13 @@ def get_all_transactions():
             credited_transaction_ids = []
 
             for _, row in credited_rows.iterrows():
+                # FILTER: Skip rows with null/empty credited transaction ID
+                credited_trans_id = str(row.iloc[9]).strip() if pd.notna(row.iloc[9]) else ''
+                if not credited_trans_id or credited_trans_id.lower() in ('nan', 'none', '', '-', 'null'):
+                    continue
+                    
                 amt = clean_amount(row.iloc[11])
-                trans_id = str(row.iloc[9]).strip() if pd.notna(row.iloc[9]) else ''
+                trans_id = credited_trans_id
 
                 # Collect credited transaction IDs
                 if trans_id and trans_id.lower() not in ('', 'nan', 'none', 'unknown', '-'):
@@ -1089,6 +1188,11 @@ def get_all_transactions():
             # Join credited transaction IDs
             unique_credited_trans_ids = list(set(credited_transaction_ids))
             credited_trans_id_str = "; ".join(unique_credited_trans_ids) if unique_credited_trans_ids else "None"
+            
+            # SKIP accounts with no valid credited transactions (all were filtered out)
+            if total_credited == 0 and len(credited_transaction_ids) == 0 and len(credited_rows) > 0:
+                # This account only has rows with null credited transaction IDs, skip it
+                continue
 
             # Debited stats (Money going OUT)
             debited_rows = df_ack_main[debited_series == acc]
@@ -1115,7 +1219,12 @@ def get_all_transactions():
             checked_trans_ids = set()
 
             for _, row in credited_rows.iterrows():
-                trans_id = str(row.iloc[9]).strip() if pd.notna(row.iloc[9]) else ''
+                # FILTER: Skip rows with null/empty credited transaction ID
+                credited_trans_id = str(row.iloc[9]).strip() if pd.notna(row.iloc[9]) else ''
+                if not credited_trans_id or credited_trans_id.lower() in ('nan', 'none', '', '-', 'null'):
+                    continue
+                    
+                trans_id = credited_trans_id
                 if trans_id and trans_id not in checked_trans_ids:
                     checked_trans_ids.add(trans_id)
                     breakdown = get_transaction_breakdown(trans_id)
@@ -1204,7 +1313,8 @@ def get_all_transactions_by_id():
         # Collect all unique credited transaction IDs (column 9 only)
         all_trans_ids = set()
         credited_trans_ids = df_ack_main.iloc[:, 9].astype(str).str.strip()
-        all_trans_ids.update([tid for tid in credited_trans_ids if tid and tid.lower() not in ('nan', 'none', '', 'unknown', '-')])
+        # FILTER: Only include non-null credited transaction IDs
+        all_trans_ids.update([tid for tid in credited_trans_ids if tid and tid.lower() not in ('nan', 'none', '', 'unknown', '-', 'null')])
 
         for trans_id in sorted(all_trans_ids):
             # Find all rows where this transaction ID appears as credited (column 9)
@@ -2147,22 +2257,59 @@ def download_account_summary():
                 covered_keys = set()
                 
                 # OPTIMIZED: Pre-build duplicate count lookup dictionary for this acknowledgment
+                # New logic: Check all fields - last 4 digits of accounts + all other fields
                 duplicate_count_map = {}
                 for _, check_row in df_ack_main.iterrows():
                     check_ack = str(check_row.iloc[1]).strip() if pd.notna(check_row.iloc[1]) else ''
+                    check_debited_acc = str(check_row.iloc[2]).strip() if pd.notna(check_row.iloc[2]) else ''
+                    check_debited_trans_id = str(check_row.iloc[3]).strip() if pd.notna(check_row.iloc[3]) else ''
+                    check_bank = str(check_row.iloc[4]).strip() if pd.notna(check_row.iloc[4]) else ''
+                    check_layer = str(int(check_row.iloc[5])) if pd.notna(check_row.iloc[5]) else ''
                     check_credited_acc = str(check_row.iloc[6]).strip() if pd.notna(check_row.iloc[6]) else ''
+                    check_ifsc = str(check_row.iloc[7]).strip() if pd.notna(check_row.iloc[7]) else ''
+                    check_trans_date = str(check_row.iloc[8]).strip() if pd.notna(check_row.iloc[8]) else ''
                     check_credited_trans_id = str(check_row.iloc[9]).strip() if pd.notna(check_row.iloc[9]) else ''
+                    check_transaction_amt = clean_amount(check_row.iloc[10])
                     check_disputed_amt = clean_amount(check_row.iloc[11])
                     
                     if check_ack == current_ack and check_credited_trans_id and check_credited_trans_id.lower() not in ('', 'nan', 'none', 'unknown', '-'):
-                        check_acc_last4 = get_last_4_digits(check_credited_acc)
-                        duplicate_key = (check_ack, check_credited_trans_id, f"{check_disputed_amt:.2f}", check_acc_last4)
+                        # Get last 4 digits of both accounts
+                        check_deb_acc_last4 = get_last_4_digits(check_debited_acc)
+                        check_cre_acc_last4 = get_last_4_digits(check_credited_acc)
+                        
+                        # Create comprehensive signature
+                        duplicate_key = (
+                            check_ack,
+                            check_deb_acc_last4,
+                            check_debited_trans_id,
+                            check_bank,
+                            check_layer,
+                            check_cre_acc_last4,
+                            check_ifsc,
+                            check_trans_date,
+                            check_credited_trans_id,
+                            f"{check_transaction_amt:.2f}",
+                            f"{check_disputed_amt:.2f}"
+                        )
                         duplicate_count_map[duplicate_key] = duplicate_count_map.get(duplicate_key, 0) + 1
                 
                 for _, row in credited_rows.iterrows():
                     amt = clean_amount(row.iloc[11])
                     trans_id = str(row.iloc[9]).strip() if pd.notna(row.iloc[9]) else ''
-                    current_acc_last4 = get_last_4_digits(row.iloc[6])
+                    
+                    # Get all fields for comprehensive duplicate check
+                    deb_acc = str(row.iloc[2]).strip() if pd.notna(row.iloc[2]) else ''
+                    deb_trans_id = str(row.iloc[3]).strip() if pd.notna(row.iloc[3]) else ''
+                    bank = str(row.iloc[4]).strip() if pd.notna(row.iloc[4]) else ''
+                    layer = str(int(row.iloc[5])) if pd.notna(row.iloc[5]) else ''
+                    cre_acc = str(row.iloc[6]).strip() if pd.notna(row.iloc[6]) else ''
+                    ifsc = str(row.iloc[7]).strip() if pd.notna(row.iloc[7]) else ''
+                    trans_date = str(row.iloc[8]).strip() if pd.notna(row.iloc[8]) else ''
+                    transaction_amt = clean_amount(row.iloc[10])
+                    
+                    # Get last 4 digits
+                    deb_acc_last4 = get_last_4_digits(deb_acc)
+                    cre_acc_last4 = get_last_4_digits(cre_acc)
                     
                     # Collect credited transaction IDs
                     if trans_id and trans_id.lower() not in ('', 'nan', 'none', 'unknown', '-'):
@@ -2172,8 +2319,20 @@ def download_account_summary():
                     if trans_id.lower() in ('', 'nan', 'none', 'unknown', '-'):
                         total_credited += amt
                     else:
-                        # New duplicate detection logic: match ack, credited_trans_id, disputed_amt, and last 4 digits of account
-                        duplicate_key = (current_ack, trans_id, f"{amt:.2f}", current_acc_last4)
+                        # New comprehensive duplicate detection logic
+                        duplicate_key = (
+                            current_ack,
+                            deb_acc_last4,
+                            deb_trans_id,
+                            bank,
+                            layer,
+                            cre_acc_last4,
+                            ifsc,
+                            trans_date,
+                            trans_id,
+                            f"{transaction_amt:.2f}",
+                            f"{amt:.2f}"
+                        )
                         
                         # Get duplicate count from pre-built map
                         duplicate_count = duplicate_count_map.get(duplicate_key, 1)
@@ -2184,14 +2343,12 @@ def download_account_summary():
                             
                             # If this appears more than once, record the duplicates
                             if duplicate_count > 1:
-                                d_bank = str(row.iloc[4]).strip() if pd.notna(row.iloc[4]) else "Unknown Bank"
-                                d_deb_acc = str(row.iloc[2]).strip() if pd.notna(row.iloc[2]) else "Unknown Account"
-                                duplicate_details.append(f"₹{amt:,.2f} (TID: {trans_id}, Last4: {current_acc_last4}, Count: {duplicate_count})")
+                                d_bank = bank if bank else "Unknown Bank"
+                                duplicate_details.append(f"₹{amt:,.2f} (TID: {trans_id}, Last4: {cre_acc_last4}, Count: {duplicate_count})")
                         else:
                             # This is a duplicate based on new logic - don't add to total but record it
-                            d_bank = str(row.iloc[4]).strip() if pd.notna(row.iloc[4]) else "Unknown Bank"
-                            d_deb_acc = str(row.iloc[2]).strip() if pd.notna(row.iloc[2]) else "Unknown Account"
-                            duplicate_details.append(f"₹{amt:,.2f} (Duplicate: TID: {trans_id}, Last4: {current_acc_last4})")
+                            d_bank = bank if bank else "Unknown Bank"
+                            duplicate_details.append(f"₹{amt:,.2f} (Duplicate: TID: {trans_id}, Last4: {cre_acc_last4})")
                 
                 # Remove duplicates and join credited transaction IDs
                 unique_credited_trans_ids = list(set(credited_transaction_ids))
@@ -2720,6 +2877,11 @@ def get_layer1_transactions():
         layer1_txns = []
         for idx, row in df_main.iterrows():
             if row.iloc[5] == 1:  # Layer column
+                # FILTER: Skip rows with null/empty credited transaction ID
+                credited_trans_id = str(row.iloc[9]).strip() if pd.notna(row.iloc[9]) else ''
+                if not credited_trans_id or credited_trans_id.lower() in ('nan', 'none', '', '-', 'null'):
+                    continue
+                    
                 trans_id = str(row.iloc[3]).strip() if pd.notna(row.iloc[3]) else ''
                 account = str(row.iloc[2]).strip() if pd.notna(row.iloc[2]) else ''
                 amount = clean_amount(row.iloc[11])
@@ -2737,6 +2899,66 @@ def get_layer1_transactions():
         
         return jsonify({'transactions': layer1_txns})
     except Exception as e:
+        return jsonify({'error': str(e)})
+
+
+@app.route('/api/get_all_layer1_flows')
+def get_all_layer1_flows():
+    """Get flow diagrams for ALL Layer 1 transactions in one view"""
+    try:
+        if df_main is None:
+            return jsonify({'error': 'No data loaded'})
+        
+        # Get all Layer 1 transactions
+        layer1_flows = []
+        
+        for idx, row in df_main.iterrows():
+            if row.iloc[5] == 1:  # Layer column
+                # FILTER: Skip rows with null/empty credited transaction ID
+                credited_trans_id = str(row.iloc[9]).strip() if pd.notna(row.iloc[9]) else ''
+                if not credited_trans_id or credited_trans_id.lower() in ('nan', 'none', '', '-', 'null'):
+                    continue
+                    
+                trans_id = str(row.iloc[3]).strip() if pd.notna(row.iloc[3]) else ''
+                if not trans_id:
+                    continue
+                
+                # Get basic info
+                account = str(row.iloc[2]).strip() if pd.notna(row.iloc[2]) else ''
+                bank = str(row.iloc[4]).strip() if pd.notna(row.iloc[4]) else 'Unknown Bank'
+                amount = clean_amount(row.iloc[11])
+                ack_no = str(row.iloc[1]).strip() if pd.notna(row.iloc[1]) else ''
+                date = str(row.iloc[10]).strip() if pd.notna(row.iloc[10]) else ''
+                
+                # Build tree structure
+                tree = build_tree_from_transaction(idx, row)
+                
+                # Organize by layers
+                layers_data = organize_tree_by_layers(tree)
+                
+                # Get cash-out data
+                cashout_data = get_cashout_data(trans_id)
+                
+                layer1_flows.append({
+                    'trans_id': trans_id,
+                    'account': account,
+                    'bank': bank,
+                    'amount': amount,
+                    'ack_no': ack_no,
+                    'date': date,
+                    'layers': layers_data,
+                    'cashout': cashout_data,
+                    'max_layer': max(layer['layer'] for layer in layers_data) if layers_data else 1
+                })
+        
+        return jsonify({
+            'flows': layer1_flows,
+            'total_count': len(layer1_flows)
+        })
+    except Exception as e:
+        import traceback
+        print(f"Error in get_all_layer1_flows: {str(e)}")
+        print(traceback.format_exc())
         return jsonify({'error': str(e)})
 
 
@@ -2760,6 +2982,11 @@ def get_all_transactions_tree():
             date = str(df_main.iloc[0, 10]).strip() if pd.notna(df_main.iloc[0, 10]) else ''
         
         for idx, row in df_main.iterrows():
+            # FILTER: Skip rows with null/empty credited transaction ID
+            credited_trans_id = str(row.iloc[9]).strip() if pd.notna(row.iloc[9]) else ''
+            if not credited_trans_id or credited_trans_id.lower() in ('nan', 'none', '', '-', 'null'):
+                continue
+                
             trans_id = str(row.iloc[3]).strip() if pd.notna(row.iloc[3]) else ''
             account = str(row.iloc[2]).strip() if pd.notna(row.iloc[2]) else ''
             bank = str(row.iloc[4]).strip() if pd.notna(row.iloc[4]) else 'Unknown Bank'
@@ -3152,6 +3379,11 @@ def get_cashout_data(root_trans_id):
     layer1_row = None
     layer1_idx = None
     for idx, row in df_main.iterrows():
+        # FILTER: Skip rows with null/empty credited transaction ID
+        credited_trans_id = str(row.iloc[9]).strip() if pd.notna(row.iloc[9]) else ''
+        if not credited_trans_id or credited_trans_id.lower() in ('nan', 'none', '', '-', 'null'):
+            continue
+            
         if str(row.iloc[3]).strip() == root_trans_id and row.iloc[5] == 1:
             layer1_row = row
             layer1_idx = idx

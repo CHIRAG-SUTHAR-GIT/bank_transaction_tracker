@@ -1,0 +1,833 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Account Summary Control Room</title>
+    <style>
+        :root {
+            --ink: #10233f;
+            --muted: #617087;
+            --line: #dbe3ec;
+            --canvas: #f3f6f9;
+            --panel: #ffffff;
+            --navy: #10233f;
+            --blue: #1663d6;
+            --blue-soft: #eaf2ff;
+            --green: #168457;
+            --green-soft: #e5f7ef;
+            --amber: #b96b0b;
+            --amber-soft: #fff4df;
+            --red: #bf2f3e;
+            --red-soft: #fdecef;
+            --shadow: 0 14px 34px rgba(16, 35, 63, .08);
+        }
+
+        * { box-sizing: border-box; }
+        body {
+            margin: 0;
+            min-width: 320px;
+            color: var(--ink);
+            background:
+                radial-gradient(circle at 92% 0%, rgba(22, 99, 214, .10), transparent 28rem),
+                var(--canvas);
+            font: 14px/1.45 "Segoe UI", Inter, Arial, sans-serif;
+        }
+
+        button, input, select { font: inherit; }
+        button, a { -webkit-tap-highlight-color: transparent; }
+
+        .topbar {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 24px;
+            padding: 24px clamp(18px, 4vw, 52px);
+            color: #fff;
+            background: linear-gradient(120deg, #10233f 0%, #18375f 64%, #1663d6 140%);
+        }
+
+        .brand { display: flex; align-items: center; gap: 14px; }
+        .brand-mark {
+            display: grid;
+            width: 46px;
+            height: 46px;
+            place-items: center;
+            border: 1px solid rgba(255,255,255,.28);
+            border-radius: 14px;
+            background: rgba(255,255,255,.12);
+            font-size: 18px;
+            font-weight: 800;
+            letter-spacing: -.04em;
+        }
+        h1 { margin: 0; font-size: clamp(19px, 2.2vw, 28px); line-height: 1.1; }
+        .subtitle { margin-top: 5px; color: #cbd8e9; font-size: 13px; }
+        .worker-pill {
+            display: flex;
+            align-items: center;
+            gap: 9px;
+            min-width: max-content;
+            padding: 9px 13px;
+            border: 1px solid rgba(255,255,255,.22);
+            border-radius: 999px;
+            background: rgba(255,255,255,.1);
+            color: #e9f1fb;
+            font-size: 12px;
+            font-weight: 700;
+        }
+        .pulse {
+            width: 9px;
+            height: 9px;
+            border-radius: 50%;
+            background: #97a7ba;
+            box-shadow: 0 0 0 4px rgba(151,167,186,.15);
+        }
+        .worker-pill.running .pulse {
+            background: #51dd9e;
+            box-shadow: 0 0 0 4px rgba(81,221,158,.15);
+            animation: pulse 1.8s infinite;
+        }
+        @keyframes pulse {
+            50% { box-shadow: 0 0 0 8px rgba(81,221,158,0); }
+        }
+
+        main {
+            width: min(1720px, 100%);
+            margin: 0 auto;
+            padding: 24px clamp(14px, 3vw, 36px) 48px;
+        }
+
+        .progress-panel,
+        .filters,
+        .table-panel,
+        .failures-panel {
+            border: 1px solid rgba(210, 221, 232, .9);
+            border-radius: 18px;
+            background: rgba(255,255,255,.96);
+            box-shadow: var(--shadow);
+        }
+
+        .progress-panel {
+            display: grid;
+            grid-template-columns: minmax(260px, 1.2fr) repeat(4, minmax(120px, .6fr));
+            gap: 18px;
+            align-items: center;
+            padding: 19px 21px;
+        }
+        .progress-copy { min-width: 0; }
+        .eyebrow {
+            color: var(--blue);
+            font-size: 11px;
+            font-weight: 800;
+            letter-spacing: .09em;
+            text-transform: uppercase;
+        }
+        .progress-title {
+            display: flex;
+            justify-content: space-between;
+            gap: 16px;
+            margin: 4px 0 9px;
+            font-weight: 750;
+        }
+        .progress-track {
+            overflow: hidden;
+            height: 8px;
+            border-radius: 999px;
+            background: #e9eef4;
+        }
+        .progress-fill {
+            width: 0;
+            height: 100%;
+            border-radius: inherit;
+            background: linear-gradient(90deg, #1663d6, #25a579);
+            transition: width .4s ease;
+        }
+        .current-file {
+            overflow: hidden;
+            margin-top: 8px;
+            color: var(--muted);
+            font-size: 12px;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+        .mini-stat {
+            min-width: 0;
+            padding-left: 16px;
+            border-left: 1px solid var(--line);
+        }
+        .mini-stat strong { display: block; font-size: 21px; line-height: 1.15; }
+        .mini-stat span { color: var(--muted); font-size: 12px; }
+
+        .filters {
+            display: grid;
+            grid-template-columns: minmax(260px, 1.2fr) minmax(180px, .7fr) minmax(210px, 1fr) auto;
+            gap: 14px;
+            align-items: end;
+            margin-top: 18px;
+            padding: 18px;
+        }
+        .field { position: relative; }
+        .field label {
+            display: block;
+            margin-bottom: 6px;
+            color: #52627a;
+            font-size: 11px;
+            font-weight: 800;
+            letter-spacing: .06em;
+            text-transform: uppercase;
+        }
+        .control,
+        .search-wrap input {
+            width: 100%;
+            height: 42px;
+            border: 1px solid #ccd7e3;
+            border-radius: 10px;
+            outline: 0;
+            background: #fff;
+            color: var(--ink);
+            padding: 0 12px;
+            transition: border .15s, box-shadow .15s;
+        }
+        .control:focus,
+        .search-wrap input:focus {
+            border-color: #6c9fe7;
+            box-shadow: 0 0 0 3px rgba(22,99,214,.12);
+        }
+        .ack-row { display: flex; gap: 8px; }
+        .ack-row .control { min-width: 0; }
+        .suggestions {
+            position: absolute;
+            z-index: 20;
+            top: calc(100% + 6px);
+            right: 0;
+            left: 0;
+            overflow: auto;
+            max-height: 250px;
+            border: 1px solid var(--line);
+            border-radius: 11px;
+            background: white;
+            box-shadow: 0 18px 36px rgba(16,35,63,.16);
+        }
+        .suggestions[hidden] { display: none; }
+        .suggestion {
+            display: flex;
+            width: 100%;
+            justify-content: space-between;
+            gap: 12px;
+            padding: 10px 12px;
+            border: 0;
+            border-bottom: 1px solid #eef2f6;
+            background: white;
+            color: var(--ink);
+            cursor: pointer;
+            text-align: left;
+        }
+        .suggestion:hover,
+        .suggestion:focus { background: var(--blue-soft); }
+        .suggestion small { color: var(--muted); }
+
+        .btn {
+            display: inline-flex;
+            height: 42px;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
+            padding: 0 14px;
+            border: 0;
+            border-radius: 10px;
+            cursor: pointer;
+            font-weight: 750;
+            text-decoration: none;
+            transition: transform .15s, background .15s, box-shadow .15s;
+        }
+        .btn:hover { transform: translateY(-1px); }
+        .btn-primary {
+            background: var(--blue);
+            color: white;
+            box-shadow: 0 7px 18px rgba(22,99,214,.22);
+        }
+        .btn-primary:hover { background: #0f55bd; }
+        .btn-soft { background: #edf2f7; color: #33445c; }
+        .btn-soft:hover { background: #e2e9f1; }
+        .download-button { white-space: nowrap; }
+
+        .kpis {
+            display: grid;
+            grid-template-columns: repeat(6, minmax(135px, 1fr));
+            gap: 12px;
+            margin: 18px 0;
+        }
+        .kpi {
+            min-width: 0;
+            padding: 16px 17px;
+            border: 1px solid rgba(214,224,234,.9);
+            border-radius: 15px;
+            background: rgba(255,255,255,.88);
+        }
+        .kpi span {
+            display: block;
+            overflow: hidden;
+            color: var(--muted);
+            font-size: 11px;
+            font-weight: 750;
+            letter-spacing: .04em;
+            text-overflow: ellipsis;
+            text-transform: uppercase;
+            white-space: nowrap;
+        }
+        .kpi strong {
+            display: block;
+            overflow: hidden;
+            margin-top: 6px;
+            font-size: clamp(17px, 1.65vw, 24px);
+            letter-spacing: -.025em;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+        .kpi.credit strong { color: var(--blue); }
+        .kpi.updated strong { color: var(--green); }
+        .kpi.open strong { color: var(--red); }
+
+        .table-panel { overflow: hidden; }
+        .table-toolbar {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 18px;
+            padding: 14px 16px;
+            border-bottom: 1px solid var(--line);
+        }
+        .tabs { display: flex; gap: 5px; }
+        .tab {
+            padding: 9px 12px;
+            border: 0;
+            border-radius: 9px;
+            background: transparent;
+            color: #53637a;
+            cursor: pointer;
+            font-weight: 750;
+        }
+        .tab.active { background: var(--blue-soft); color: var(--blue); }
+        .table-actions { display: flex; align-items: center; gap: 10px; }
+        .record-count { color: var(--muted); font-size: 12px; }
+
+        .table-wrap {
+            overflow: auto;
+            max-height: 64vh;
+            min-height: 260px;
+        }
+        table {
+            width: 100%;
+            min-width: 1260px;
+            border-collapse: separate;
+            border-spacing: 0;
+        }
+        th {
+            position: sticky;
+            z-index: 2;
+            top: 0;
+            padding: 12px 13px;
+            border-bottom: 1px solid #cbd6e2;
+            background: #edf2f7;
+            color: #33445c;
+            font-size: 11px;
+            letter-spacing: .035em;
+            text-align: left;
+            text-transform: uppercase;
+            white-space: nowrap;
+        }
+        td {
+            max-width: 320px;
+            padding: 11px 13px;
+            border-bottom: 1px solid #e8edf2;
+            color: #273a52;
+            vertical-align: top;
+            word-break: break-word;
+        }
+        tbody tr:nth-child(even) td { background: #fafbfd; }
+        tbody tr:hover td { background: #f1f6fd; }
+        .amount { text-align: right; white-space: nowrap; font-variant-numeric: tabular-nums; }
+        .status {
+            display: inline-flex;
+            min-width: 86px;
+            justify-content: center;
+            padding: 4px 9px;
+            border-radius: 999px;
+            font-size: 11px;
+            font-weight: 800;
+            letter-spacing: .03em;
+        }
+        .status.pending { color: var(--red); background: var(--red-soft); }
+        .status.partial { color: var(--amber); background: var(--amber-soft); }
+        .status.completed,
+        .status.complete { color: var(--green); background: var(--green-soft); }
+        .empty-cell {
+            padding: 58px 18px;
+            color: var(--muted);
+            text-align: center;
+        }
+        .loading-row td { color: var(--muted); text-align: center; }
+
+        .pagination {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 14px;
+            padding: 13px 16px;
+            border-top: 1px solid var(--line);
+        }
+        .page-controls { display: flex; align-items: center; gap: 7px; }
+        .page-controls .btn { width: 38px; height: 34px; padding: 0; }
+        .page-label { min-width: 130px; color: var(--muted); text-align: center; }
+        .page-size { width: auto; height: 34px; }
+
+        .failures-panel { margin-top: 18px; overflow: hidden; }
+        .failures-panel summary {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 15px 18px;
+            cursor: pointer;
+            font-weight: 750;
+            list-style: none;
+        }
+        .failures-panel summary::-webkit-details-marker { display: none; }
+        .failure-list { border-top: 1px solid var(--line); }
+        .failure-item {
+            display: grid;
+            grid-template-columns: minmax(180px, .7fr) minmax(260px, 1.5fr) auto;
+            gap: 15px;
+            padding: 12px 18px;
+            border-bottom: 1px solid #edf1f5;
+        }
+        .failure-item:last-child { border-bottom: 0; }
+        .failure-name { font-weight: 700; word-break: break-all; }
+        .failure-error { color: var(--red); word-break: break-word; }
+        .failure-meta { color: var(--muted); font-size: 12px; }
+
+        .toast {
+            position: fixed;
+            z-index: 50;
+            right: 20px;
+            bottom: 20px;
+            max-width: min(420px, calc(100vw - 40px));
+            padding: 12px 15px;
+            border-radius: 11px;
+            background: #10233f;
+            color: white;
+            box-shadow: 0 18px 40px rgba(16,35,63,.3);
+            opacity: 0;
+            pointer-events: none;
+            transform: translateY(8px);
+            transition: opacity .2s, transform .2s;
+        }
+        .toast.show { opacity: 1; transform: translateY(0); }
+
+        @media (max-width: 1100px) {
+            .progress-panel { grid-template-columns: 1fr 1fr 1fr; }
+            .progress-copy { grid-column: 1 / -1; }
+            .mini-stat { padding-left: 0; border-left: 0; }
+            .filters { grid-template-columns: 1fr 1fr; }
+            .kpis { grid-template-columns: repeat(3, 1fr); }
+        }
+        @media (max-width: 680px) {
+            .topbar { align-items: flex-start; flex-direction: column; }
+            .progress-panel { grid-template-columns: 1fr 1fr; }
+            .filters { grid-template-columns: 1fr; }
+            .kpis { grid-template-columns: 1fr 1fr; }
+            .table-toolbar { align-items: flex-start; flex-direction: column; }
+            .tabs { overflow-x: auto; width: 100%; }
+            .table-actions { width: 100%; justify-content: space-between; }
+            .pagination { align-items: flex-start; flex-direction: column; }
+            .failure-item { grid-template-columns: 1fr; gap: 5px; }
+        }
+    </style>
+</head>
+<body>
+    <header class="topbar">
+        <div class="brand">
+            <div class="brand-mark">AS</div>
+            <div>
+                <h1>Account Summary Control Room</h1>
+                <div class="subtitle">Consolidated SQLite view · {{ database_name }}</div>
+            </div>
+        </div>
+        <div class="worker-pill" id="workerPill">
+            <span class="pulse"></span>
+            <span id="workerState">Checking worker…</span>
+        </div>
+    </header>
+
+    <main>
+        <section class="progress-panel" aria-label="Overnight processing progress">
+            <div class="progress-copy">
+                <div class="eyebrow">Overnight processing</div>
+                <div class="progress-title">
+                    <span id="progressLabel">Reading database…</span>
+                    <strong id="progressPercent">0%</strong>
+                </div>
+                <div class="progress-track" aria-hidden="true">
+                    <div class="progress-fill" id="progressFill"></div>
+                </div>
+                <div class="current-file" id="currentFile">Waiting for worker status</div>
+            </div>
+            <div class="mini-stat"><strong id="filesCompleted">0</strong><span>Files complete</span></div>
+            <div class="mini-stat"><strong id="filesPending">0</strong><span>Files pending</span></div>
+            <div class="mini-stat"><strong id="filesFailed">0</strong><span>Files failed</span></div>
+            <div class="mini-stat"><strong id="acksStored">0</strong><span>ACKs stored</span></div>
+        </section>
+
+        <section class="filters" aria-label="Summary filters">
+            <div class="field">
+                <label for="ackInput">Acknowledgement number</label>
+                <div class="ack-row">
+                    <input class="control" id="ackInput" autocomplete="off" placeholder="All ACKs" aria-autocomplete="list">
+                    <button class="btn btn-soft" id="allAcksButton" type="button">All ACKs</button>
+                </div>
+                <div class="suggestions" id="ackSuggestions" role="listbox" hidden></div>
+            </div>
+            <div class="field">
+                <label for="statusFilter">Status</label>
+                <select class="control" id="statusFilter">
+                    <option value="ALL">All statuses</option>
+                    <option value="PENDING">Pending</option>
+                    <option value="PARTIAL">Partial</option>
+                    <option value="COMPLETED">Completed</option>
+                </select>
+            </div>
+            <div class="field search-wrap">
+                <label for="rowSearch">Search current table</label>
+                <input id="rowSearch" type="search" placeholder="Bank, account, transaction ID…">
+            </div>
+            <a class="btn btn-primary download-button" id="downloadButton" href="/download/excel?ack=ALL">
+                Download all ACKs
+            </a>
+        </section>
+
+        <section class="kpis" aria-label="Selected summary totals">
+            <div class="kpi"><span>ACKs</span><strong id="totalAcks">0</strong></div>
+            <div class="kpi"><span>Accounts</span><strong id="totalAccounts">0</strong></div>
+            <div class="kpi credit"><span>Total credited</span><strong id="totalCredited">₹0.00</strong></div>
+            <div class="kpi"><span>Total debited</span><strong id="totalDebited">₹0.00</strong></div>
+            <div class="kpi updated"><span>Updated / recovery</span><strong id="totalUpdated">₹0.00</strong></div>
+            <div class="kpi open"><span>Not updated</span><strong id="totalOpen">₹0.00</strong></div>
+        </section>
+
+        <section class="table-panel">
+            <div class="table-toolbar">
+                <div class="tabs" role="tablist" aria-label="Excel summary sheets">
+                    <button class="tab active" data-view="account" type="button">Account Wise Summary</button>
+                    <button class="tab" data-view="bank" type="button">Bank Wise Summary</button>
+                    <button class="tab" data-view="partial" type="button">Partial Bank Wise Summary</button>
+                </div>
+                <div class="table-actions">
+                    <span class="record-count" id="recordCount">0 rows</span>
+                    <button class="btn btn-soft" id="refreshButton" type="button">Refresh</button>
+                </div>
+            </div>
+
+            <div class="table-wrap">
+                <table>
+                    <thead><tr id="tableHead"></tr></thead>
+                    <tbody id="tableBody">
+                        <tr class="loading-row"><td>Loading summaries…</td></tr>
+                    </tbody>
+                </table>
+            </div>
+
+            <div class="pagination">
+                <select class="control page-size" id="pageSize" aria-label="Rows per page">
+                    <option value="50">50 rows</option>
+                    <option value="100" selected>100 rows</option>
+                    <option value="250">250 rows</option>
+                    <option value="500">500 rows</option>
+                </select>
+                <div class="page-controls">
+                    <button class="btn btn-soft" id="firstPage" type="button" aria-label="First page">«</button>
+                    <button class="btn btn-soft" id="previousPage" type="button" aria-label="Previous page">‹</button>
+                    <span class="page-label" id="pageLabel">Page 1 of 1</span>
+                    <button class="btn btn-soft" id="nextPage" type="button" aria-label="Next page">›</button>
+                    <button class="btn btn-soft" id="lastPage" type="button" aria-label="Last page">»</button>
+                </div>
+            </div>
+        </section>
+
+        <details class="failures-panel">
+            <summary>
+                <span>Files needing attention</span>
+                <span id="failureCount">0 failed</span>
+            </summary>
+            <div class="failure-list" id="failureList">
+                <div class="empty-cell">No failed files.</div>
+            </div>
+        </details>
+    </main>
+
+    <div class="toast" id="toast" role="status" aria-live="polite"></div>
+
+    <script>
+        const state = {
+            view: "account",
+            ack: "ALL",
+            status: "ALL",
+            search: "",
+            page: 1,
+            pageSize: 100,
+            pageCount: 1,
+            suggestionTimer: null,
+            searchTimer: null
+        };
+
+        const amountFormatter = new Intl.NumberFormat("en-IN", {
+            style: "currency",
+            currency: "INR",
+            minimumFractionDigits: 2,
+            maximumFractionDigits: 2
+        });
+        const integerFormatter = new Intl.NumberFormat("en-IN");
+        const elements = Object.fromEntries(
+            Array.from(document.querySelectorAll("[id]")).map(element => [element.id, element])
+        );
+
+        function showToast(message) {
+            elements.toast.textContent = message;
+            elements.toast.classList.add("show");
+            window.clearTimeout(showToast.timer);
+            showToast.timer = window.setTimeout(() => elements.toast.classList.remove("show"), 2800);
+        }
+
+        function escapeHtml(value) {
+            return String(value ?? "")
+                .replaceAll("&", "&amp;")
+                .replaceAll("<", "&lt;")
+                .replaceAll(">", "&gt;")
+                .replaceAll('"', "&quot;")
+                .replaceAll("'", "&#039;");
+        }
+
+        async function fetchJson(url) {
+            const response = await fetch(url, {headers: {"Accept": "application/json"}});
+            if (!response.ok) throw new Error(`Request failed (${response.status})`);
+            return response.json();
+        }
+
+        function updateDownloadLink() {
+            const ack = state.ack === "ALL" ? "ALL" : state.ack;
+            elements.downloadButton.href = `/download/excel?ack=${encodeURIComponent(ack)}`;
+            elements.downloadButton.textContent = state.ack === "ALL"
+                ? "Download all ACKs"
+                : `Download ACK ${state.ack}`;
+        }
+
+        async function loadProgress() {
+            try {
+                const data = await fetchJson("/api/progress");
+                const files = data.files;
+                const worker = data.worker || {};
+                elements.progressFill.style.width = `${files.percent}%`;
+                elements.progressPercent.textContent = `${files.percent.toFixed(1)}%`;
+                elements.progressLabel.textContent = `${integerFormatter.format(files.processed)} of ${integerFormatter.format(files.total)} files processed`;
+                elements.filesCompleted.textContent = integerFormatter.format(files.completed);
+                elements.filesPending.textContent = integerFormatter.format(files.pending + files.processing);
+                elements.filesFailed.textContent = integerFormatter.format(files.failed);
+                elements.acksStored.textContent = integerFormatter.format(data.summaries.acknowledgements || 0);
+                const running = Boolean(worker.is_running);
+                elements.workerPill.classList.toggle("running", running);
+                elements.workerState.textContent = running ? "Worker running" : "Worker stopped";
+                elements.currentFile.textContent = worker.current_file
+                    ? `Now processing: ${worker.current_file}`
+                    : (worker.message || "No file is currently being processed");
+                elements.failureCount.textContent = `${integerFormatter.format(files.failed)} failed`;
+            } catch (error) {
+                elements.workerState.textContent = "Database unavailable";
+                elements.currentFile.textContent = error.message;
+            }
+        }
+
+        async function loadFailures() {
+            try {
+                const data = await fetchJson("/api/failures?limit=12");
+                if (!data.failures.length) {
+                    elements.failureList.innerHTML = '<div class="empty-cell">No failed files.</div>';
+                    return;
+                }
+                elements.failureList.innerHTML = data.failures.map(item => `
+                    <div class="failure-item">
+                        <div>
+                            <div class="failure-name">${escapeHtml(item.file_name)}</div>
+                            <div class="failure-meta">${escapeHtml(item.completed_at || "")}</div>
+                        </div>
+                        <div class="failure-error">${escapeHtml(item.error_message || "Unknown error")}</div>
+                        <div class="failure-meta">${integerFormatter.format(item.attempts || 0)} attempt(s)</div>
+                    </div>
+                `).join("");
+            } catch (error) {
+                elements.failureList.innerHTML = `<div class="empty-cell">${escapeHtml(error.message)}</div>`;
+            }
+        }
+
+        async function loadTotals() {
+            const params = new URLSearchParams({ack: state.ack});
+            try {
+                const totals = await fetchJson(`/api/totals?${params}`);
+                elements.totalAcks.textContent = integerFormatter.format(totals.acknowledgements || 0);
+                elements.totalAccounts.textContent = integerFormatter.format(totals.account_rows || 0);
+                elements.totalCredited.textContent = amountFormatter.format(totals.total_credited || 0);
+                elements.totalDebited.textContent = amountFormatter.format(totals.total_debited || 0);
+                elements.totalUpdated.textContent = amountFormatter.format(totals.total_updated || 0);
+                elements.totalOpen.textContent = amountFormatter.format(totals.total_not_updated || 0);
+            } catch (error) {
+                showToast(`Could not load totals: ${error.message}`);
+            }
+        }
+
+        function renderTable(data) {
+            elements.tableHead.innerHTML = data.columns
+                .map(column => `<th>${escapeHtml(column.label)}</th>`)
+                .join("");
+            if (!data.rows.length) {
+                elements.tableBody.innerHTML = `
+                    <tr><td class="empty-cell" colspan="${data.columns.length}">
+                        No summary rows match the selected filters.
+                    </td></tr>`;
+            } else {
+                elements.tableBody.innerHTML = data.rows.map(row => `
+                    <tr>${data.columns.map(column => {
+                        const value = row[column.key];
+                        if (column.type === "amount") {
+                            return `<td class="amount">${amountFormatter.format(Number(value) || 0)}</td>`;
+                        }
+                        if (column.type === "status") {
+                            const normalized = String(value || "").toLowerCase();
+                            return `<td><span class="status ${escapeHtml(normalized)}">${escapeHtml(value)}</span></td>`;
+                        }
+                        return `<td>${escapeHtml(value)}</td>`;
+                    }).join("")}</tr>
+                `).join("");
+            }
+            const pagination = data.pagination;
+            state.page = pagination.page;
+            state.pageCount = pagination.page_count;
+            elements.recordCount.textContent = `${integerFormatter.format(pagination.total)} rows`;
+            elements.pageLabel.textContent = `Page ${integerFormatter.format(pagination.page)} of ${integerFormatter.format(pagination.page_count)}`;
+            elements.firstPage.disabled = pagination.page <= 1;
+            elements.previousPage.disabled = pagination.page <= 1;
+            elements.nextPage.disabled = pagination.page >= pagination.page_count;
+            elements.lastPage.disabled = pagination.page >= pagination.page_count;
+        }
+
+        async function loadTable() {
+            const params = new URLSearchParams({
+                view: state.view,
+                ack: state.ack,
+                status: state.status,
+                search: state.search,
+                page: state.page,
+                page_size: state.pageSize
+            });
+            elements.tableBody.innerHTML = '<tr class="loading-row"><td>Loading summaries…</td></tr>';
+            try {
+                renderTable(await fetchJson(`/api/summary?${params}`));
+            } catch (error) {
+                elements.tableBody.innerHTML = `<tr><td class="empty-cell">${escapeHtml(error.message)}</td></tr>`;
+                showToast(`Could not load table: ${error.message}`);
+            }
+        }
+
+        async function selectAck(ack) {
+            state.ack = ack && ack.toUpperCase() !== "ALL" ? ack.trim() : "ALL";
+            state.page = 1;
+            elements.ackInput.value = state.ack === "ALL" ? "" : state.ack;
+            elements.ackSuggestions.hidden = true;
+            updateDownloadLink();
+            await Promise.all([loadTotals(), loadTable()]);
+        }
+
+        async function loadAckSuggestions(search) {
+            try {
+                const params = new URLSearchParams({q: search, limit: "50"});
+                const data = await fetchJson(`/api/acknowledgements?${params}`);
+                if (!data.acknowledgements.length) {
+                    elements.ackSuggestions.hidden = true;
+                    return;
+                }
+                elements.ackSuggestions.innerHTML = data.acknowledgements.map(item => `
+                    <button class="suggestion" type="button" data-ack="${escapeHtml(item.acknowledgement_no)}">
+                        <span>${escapeHtml(item.acknowledgement_no)}</span>
+                        <small>${integerFormatter.format(item.account_rows)} account rows</small>
+                    </button>
+                `).join("");
+                elements.ackSuggestions.hidden = false;
+            } catch (error) {
+                elements.ackSuggestions.hidden = true;
+            }
+        }
+
+        document.querySelectorAll(".tab").forEach(tab => {
+            tab.addEventListener("click", () => {
+                document.querySelectorAll(".tab").forEach(item => item.classList.remove("active"));
+                tab.classList.add("active");
+                state.view = tab.dataset.view;
+                state.page = 1;
+                loadTable();
+            });
+        });
+
+        elements.allAcksButton.addEventListener("click", () => selectAck("ALL"));
+        elements.ackInput.addEventListener("input", event => {
+            window.clearTimeout(state.suggestionTimer);
+            state.suggestionTimer = window.setTimeout(
+                () => loadAckSuggestions(event.target.value),
+                180
+            );
+        });
+        elements.ackInput.addEventListener("focus", event => loadAckSuggestions(event.target.value));
+        elements.ackInput.addEventListener("keydown", event => {
+            if (event.key === "Enter") {
+                event.preventDefault();
+                selectAck(event.target.value || "ALL");
+            }
+            if (event.key === "Escape") elements.ackSuggestions.hidden = true;
+        });
+        elements.ackSuggestions.addEventListener("click", event => {
+            const button = event.target.closest("[data-ack]");
+            if (button) selectAck(button.dataset.ack);
+        });
+        document.addEventListener("click", event => {
+            if (!event.target.closest(".field")) elements.ackSuggestions.hidden = true;
+        });
+        elements.statusFilter.addEventListener("change", event => {
+            state.status = event.target.value;
+            state.page = 1;
+            loadTable();
+        });
+        elements.rowSearch.addEventListener("input", event => {
+            window.clearTimeout(state.searchTimer);
+            state.searchTimer = window.setTimeout(() => {
+                state.search = event.target.value.trim();
+                state.page = 1;
+                loadTable();
+            }, 250);
+        });
+        elements.pageSize.addEventListener("change", event => {
+            state.pageSize = Number(event.target.value);
+            state.page = 1;
+            loadTable();
+        });
+        elements.firstPage.addEventListener("click", () => { state.page = 1; loadTable(); });
+        elements.previousPage.addEventListener("click", () => { state.page = Math.max(1, state.page - 1); loadTable(); });
+        elements.nextPage.addEventListener("click", () => { state.page = Math.min(state.pageCount, state.page + 1); loadTable(); });
+        elements.lastPage.addEventListener("click", () => { state.page = state.pageCount; loadTable(); });
+        elements.refreshButton.addEventListener("click", async () => {
+            await Promise.all([loadProgress(), loadTotals(), loadTable(), loadFailures()]);
+            showToast("Dashboard refreshed.");
+        });
+
+        updateDownloadLink();
+        Promise.all([loadProgress(), loadTotals(), loadTable(), loadFailures()]);
+        window.setInterval(loadProgress, 5000);
+        window.setInterval(loadFailures, 30000);
+    </script>
+</body>
+</html>
+

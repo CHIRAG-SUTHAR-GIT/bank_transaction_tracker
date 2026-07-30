@@ -88,6 +88,14 @@ http://localhost:5000
    - Flow Diagram: Visual money flow representation
    - Reports: Download various analysis reports
 
+### Overnight account-summary database
+
+For a resumable batch run across all workbooks in
+`C:\Users\admin\Desktop\bank_trails`, double-click
+`START_OVERNIGHT_AND_DASHBOARD.bat`. It creates a consolidated SQLite database,
+opens a local dashboard, and supports Excel export for all ACKs or one selected
+ACK. See `ACCOUNT_SUMMARY_BATCH_GUIDE.md` for details.
+
 ## File Structure
 
 ```

@@ -49,6 +49,10 @@ Thumbs.db
 # Logs
 *.log
 
+# Consolidated account-summary database and runtime locks
+data/
+*.worker.lock
+
 # Environment variables
 .env
 .env.local

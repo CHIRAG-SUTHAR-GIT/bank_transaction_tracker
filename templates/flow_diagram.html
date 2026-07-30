@@ -506,16 +506,173 @@
                         option.textContent = `${txn.account} - ${txn.bank} - ₹${txn.amount.toLocaleString('en-IN')}`;
                         select.appendChild(option);
                     });
+                    
+                    // Load all Layer 1 flows by default
+                    loadAllFlows();
                 })
                 .catch(error => {
                     console.error('Error loading transactions:', error);
                 });
         };
 
+        function loadAllFlows() {
+            const container = document.getElementById('flowDiagram');
+            container.innerHTML = '<div class="loading">Loading all Layer 1 transaction flows...</div>';
+
+            fetch('/api/get_all_layer1_flows')
+                .then(response => response.json())
+                .then(data => {
+                    if (data.error) {
+                        container.innerHTML = `<div class="error">${data.error}</div>`;
+                        return;
+                    }
+                    renderAllFlows(data.flows);
+                })
+                .catch(error => {
+                    container.innerHTML = `<div class="error">Error loading flows: ${error.message}</div>`;
+                });
+        }
+
+        function renderAllFlows(flows) {
+            const container = document.getElementById('flowDiagram');
+            container.innerHTML = '';
+
+            if (flows.length === 0) {
+                container.innerHTML = '<div class="loading">No Layer 1 transactions found</div>';
+                return;
+            }
+
+            // Add header
+            const header = document.createElement('div');
+            header.style.cssText = 'text-align: center; margin-bottom: 30px; padding: 20px; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; border-radius: 10px;';
+            header.innerHTML = `<h2 style="margin: 0;">All Layer 1 Transaction Flows (${flows.length} transactions)</h2>`;
+            container.appendChild(header);
+
+            // Render each flow
+            flows.forEach((flow, index) => {
+                const flowSection = document.createElement('div');
+                flowSection.style.cssText = 'margin-bottom: 50px; padding: 30px; background: #f8f9fa; border-radius: 10px; border: 2px solid #dee2e6;';
+
+                // Flow header
+                const flowHeader = document.createElement('div');
+                flowHeader.style.cssText = 'background: white; padding: 20px; border-radius: 8px; margin-bottom: 20px; box-shadow: 0 2px 5px rgba(0,0,0,0.1);';
+                flowHeader.innerHTML = `
+                    <h3 style="margin: 0 0 10px 0; color: #2c3e50;">Transaction ${index + 1}: ${flow.trans_id}</h3>
+                    <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 15px; font-size: 14px;">
+                        <div><strong>Bank:</strong> ${flow.bank}</div>
+                        <div><strong>Account:</strong> ${flow.account}</div>
+                        <div><strong>Amount:</strong> <span style="color: #27ae60; font-weight: bold;">₹${flow.amount.toLocaleString('en-IN')}</span></div>
+                        <div><strong>Ack No:</strong> ${flow.ack_no || 'N/A'}</div>
+                        <div><strong>Date:</strong> ${flow.date || 'N/A'}</div>
+                    </div>
+                `;
+                flowSection.appendChild(flowHeader);
+
+                // Render layers for this flow
+                const flowDiagram = document.createElement('div');
+                flowDiagram.className = 'flow-diagram';
+                flowDiagram.style.background = 'white';
+                flowDiagram.style.padding = '20px';
+                flowDiagram.style.borderRadius = '8px';
+
+                flow.layers.forEach((layer, layerIndex) => {
+                    if (layer.nodes.length === 0) return;
+
+                    const layerSection = document.createElement('div');
+                    layerSection.className = 'layer-section';
+
+                    const layerTitle = document.createElement('div');
+                    layerTitle.className = 'layer-title';
+                    layerTitle.textContent = `LAYER ${layer.layer} — ${layer.description}`;
+                    layerSection.appendChild(layerTitle);
+
+                    const layerNodes = document.createElement('div');
+                    layerNodes.className = 'layer-nodes';
+
+                    layer.nodes.forEach(node => {
+                        const collapseId = `flow${index}_${node.collapse_id || ''}`;
+                        if (node.is_collapsed && !expandedNodes.has(collapseId)) {
+                            const collapsedNode = createNode(node, true, collapseId);
+                            layerNodes.appendChild(collapsedNode);
+                        } else if (node.is_collapsed && expandedNodes.has(collapseId)) {
+                            node.collapsed_items.forEach(item => {
+                                const expandedNode = createNode(item, false, collapseId);
+                                layerNodes.appendChild(expandedNode);
+                            });
+                        } else {
+                            const nodeEl = createNode(node, false, collapseId);
+                            layerNodes.appendChild(nodeEl);
+                        }
+                    });
+
+                    layerSection.appendChild(layerNodes);
+                    flowDiagram.appendChild(layerSection);
+
+                    if (layerIndex < flow.layers.length - 1) {
+                        const connector = document.createElement('div');
+                        connector.className = 'connector';
+                        flowDiagram.appendChild(connector);
+                    }
+                });
+
+                // Render cash-out section
+                if (flow.cashout && Object.keys(flow.cashout).length > 0) {
+                    const cashoutSection = document.createElement('div');
+                    cashoutSection.className = 'cashout-section';
+
+                    const cashoutTitle = document.createElement('div');
+                    cashoutTitle.className = 'cashout-title';
+                    cashoutTitle.textContent = 'CASH-OUT CHANNELS (accounts across Layers 2-' + flow.max_layer + ')';
+                    cashoutSection.appendChild(cashoutTitle);
+
+                    Object.keys(flow.cashout).forEach(type => {
+                        const group = flow.cashout[type];
+                        if (group.items.length === 0) return;
+
+                        const groupDiv = document.createElement('div');
+                        groupDiv.className = 'cashout-group';
+
+                        const groupTitle = document.createElement('div');
+                        groupTitle.className = 'cashout-group-title';
+                        groupTitle.textContent = `${group.title} — ${group.count} txns · ₹${group.total.toLocaleString('en-IN')} total · ${group.subtitle}`;
+                        groupDiv.appendChild(groupTitle);
+
+                        const groupNodes = document.createElement('div');
+                        groupNodes.className = 'layer-nodes';
+
+                        group.items.forEach(item => {
+                            const collapseId = `flow${index}_${item.collapse_id || ''}`;
+                            if (item.is_collapsed && !expandedNodes.has(collapseId)) {
+                                const collapsedNode = createNode(item, true, collapseId);
+                                groupNodes.appendChild(collapsedNode);
+                            } else if (item.is_collapsed && expandedNodes.has(collapseId)) {
+                                item.collapsed_items.forEach(subItem => {
+                                    const expandedNode = createNode(subItem, false, collapseId);
+                                    groupNodes.appendChild(expandedNode);
+                                });
+                            } else {
+                                const nodeEl = createNode(item, false, collapseId);
+                                groupNodes.appendChild(nodeEl);
+                            }
+                        });
+
+                        groupDiv.appendChild(groupNodes);
+                        cashoutSection.appendChild(groupDiv);
+                    });
+
+                    flowDiagram.appendChild(cashoutSection);
+                }
+
+                flowSection.appendChild(flowDiagram);
+                container.appendChild(flowSection);
+            });
+        }
+
         function loadFlowDiagram() {
             const transId = document.getElementById('transactionSelect').value;
             if (!transId) {
-                alert('Please select a transaction');
+                // If no transaction selected, show all flows
+                loadAllFlows();
                 return;
             }
 
@@ -647,9 +804,12 @@
             }
         }
 
-        function createNode(node, isCollapsed) {
+        function createNode(node, isCollapsed, collapseId = null) {
             const nodeEl = document.createElement('div');
             nodeEl.className = `node ${node.type}`;
+            
+            // Use provided collapseId or node's collapse_id
+            const nodeCollapseId = collapseId || node.collapse_id;
             
             if (isCollapsed) {
                 nodeEl.classList.add('expand-node');
@@ -657,7 +817,7 @@
                     <div class="node-bank">+${node.collapsed_count} more ${node.collapsed_label}</div>
                     <div class="node-extra">${node.collapsed_preview}</div>
                 `;
-                nodeEl.onclick = () => toggleExpand(node.collapse_id);
+                nodeEl.onclick = () => toggleExpand(nodeCollapseId);
             } else {
                 // Determine status indicator color
                 let statusClass = 'pending';
@@ -698,7 +858,12 @@
             } else {
                 expandedNodes.add(collapseId);
             }
-            renderFlowDiagram(flowData);
+            // Re-render based on current view
+            if (flowData) {
+                renderFlowDiagram(flowData);
+            } else {
+                loadAllFlows();
+            }
         }
 
         function showDetails(node) {

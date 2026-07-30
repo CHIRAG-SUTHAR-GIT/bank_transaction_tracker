@@ -596,6 +596,9 @@
                 <button id="flowDiagramBtn" style="padding: 12px 30px; background: #2196F3; color: white; border: 2px solid #1565C0; border-radius: 4px; cursor: pointer; font-size: 14px; font-weight: 600; margin-left: 10px;" onclick="SoundNotification.click(); window.open('/flow-diagram', '_blank')">
                     🔄 View Flow Diagram
                 </button>
+                <button id="excludedRecordsBtn" style="padding: 12px 30px; background: #757575; color: white; border: 2px solid #424242; border-radius: 4px; cursor: pointer; font-size: 14px; font-weight: 600; margin-left: 10px;" onclick="SoundNotification.click(); showExcludedRecords()">
+                    🚫 View Excluded Records
+                </button>
             </div>
         </div>
         
@@ -2023,11 +2026,83 @@
             document.getElementById('sheetDetailsModal').style.display = 'none';
         }
         
+        // Excluded Records Functions
+        async function showExcludedRecords() {
+            const modal = document.getElementById('excludedRecordsModal');
+            const modalBody = document.getElementById('excludedModalBody');
+            
+            modalBody.innerHTML = '<div style="text-align: center; padding: 40px; color: #666;">Loading...</div>';
+            modal.style.display = 'block';
+            
+            try {
+                const response = await fetch('/api/excluded-records');
+                const data = await response.json();
+                
+                let html = `<div style="margin-bottom: 15px; padding: 15px; background: #fff3cd; border-radius: 5px; border-left: 4px solid #ffc107;">
+                    <strong>ℹ️ About Excluded Records:</strong><br>
+                    These records have null or empty Credited Transaction IDs and are excluded from all main views, reports, and calculations.<br>
+                    <strong>Total Records:</strong> ${data.count} | <strong>Total Amount:</strong> ₹${data.total_amount.toLocaleString('en-IN', {minimumFractionDigits: 2, maximumFractionDigits: 2})}
+                </div>`;
+                
+                if (data.count === 0) {
+                    html += '<div style="text-align: center; padding: 40px; color: #4CAF50;"><h3>✅ No Excluded Records</h3><p>All records have valid Credited Transaction IDs.</p></div>';
+                } else {
+                    html += '<div style="max-height: 600px; overflow-y: auto;">';
+                    html += '<table style="width: 100%; border-collapse: collapse; font-size: 13px;">';
+                    html += '<thead><tr style="background: #757575; color: white; position: sticky; top: 0;">';
+                    html += '<th style="padding: 10px; text-align: left; border: 1px solid #ddd;">S.No</th>';
+                    html += '<th style="padding: 10px; text-align: left; border: 1px solid #ddd;">Ack No</th>';
+                    html += '<th style="padding: 10px; text-align: left; border: 1px solid #ddd;">Debited Account</th>';
+                    html += '<th style="padding: 10px; text-align: left; border: 1px solid #ddd;">Debited Trans ID</th>';
+                    html += '<th style="padding: 10px; text-align: left; border: 1px solid #ddd;">Bank</th>';
+                    html += '<th style="padding: 10px; text-align: center; border: 1px solid #ddd;">Layer</th>';
+                    html += '<th style="padding: 10px; text-align: left; border: 1px solid #ddd;">Credited Account</th>';
+                    html += '<th style="padding: 10px; text-align: left; border: 1px solid #ddd;">IFSC</th>';
+                    html += '<th style="padding: 10px; text-align: left; border: 1px solid #ddd;">Date</th>';
+                    html += '<th style="padding: 10px; text-align: right; border: 1px solid #ddd;">Transaction Amount</th>';
+                    html += '<th style="padding: 10px; text-align: right; border: 1px solid #ddd;">Disputed Amount</th>';
+                    html += '<th style="padding: 10px; text-align: left; border: 1px solid #ddd;">Remarks</th>';
+                    html += '</tr></thead><tbody>';
+                    
+                    data.records.forEach((record, index) => {
+                        html += `<tr style="background: ${index % 2 === 0 ? '#f9f9f9' : 'white'};">`;
+                        html += `<td style="padding: 8px; border: 1px solid #ddd;">${record.s_no}</td>`;
+                        html += `<td style="padding: 8px; border: 1px solid #ddd;">${record.acknowledgement_no}</td>`;
+                        html += `<td style="padding: 8px; border: 1px solid #ddd; font-family: monospace;">${record.debited_account}</td>`;
+                        html += `<td style="padding: 8px; border: 1px solid #ddd; font-family: monospace;">${record.debited_transaction_id}</td>`;
+                        html += `<td style="padding: 8px; border: 1px solid #ddd;">${record.bank}</td>`;
+                        html += `<td style="padding: 8px; border: 1px solid #ddd; text-align: center;">${record.layer}</td>`;
+                        html += `<td style="padding: 8px; border: 1px solid #ddd; font-family: monospace;">${record.credited_account}</td>`;
+                        html += `<td style="padding: 8px; border: 1px solid #ddd; font-family: monospace;">${record.ifsc_code || '-'}</td>`;
+                        html += `<td style="padding: 8px; border: 1px solid #ddd; font-size: 11px;">${record.transaction_date || '-'}</td>`;
+                        html += `<td style="padding: 8px; border: 1px solid #ddd; text-align: right; font-weight: bold;">₹${record.transaction_amount.toLocaleString('en-IN')}</td>`;
+                        html += `<td style="padding: 8px; border: 1px solid #ddd; text-align: right; font-weight: bold; color: #e74c3c;">₹${record.disputed_amount.toLocaleString('en-IN')}</td>`;
+                        html += `<td style="padding: 8px; border: 1px solid #ddd; font-size: 11px;">${record.remarks || '-'}</td>`;
+                        html += '</tr>';
+                    });
+                    
+                    html += '</tbody></table></div>';
+                }
+                
+                modalBody.innerHTML = html;
+            } catch (error) {
+                modalBody.innerHTML = `<div style="text-align: center; padding: 40px; color: #e74c3c;">Error: ${error.message}</div>`;
+            }
+        }
+        
+        function closeExcludedModal() {
+            document.getElementById('excludedRecordsModal').style.display = 'none';
+        }
+        
         // Close modal when clicking outside
         window.onclick = function(event) {
-            const modal = document.getElementById('sheetDetailsModal');
-            if (event.target == modal) {
+            const sheetModal = document.getElementById('sheetDetailsModal');
+            const excludedModal = document.getElementById('excludedRecordsModal');
+            if (event.target == sheetModal) {
                 closeSheetModal();
+            }
+            if (event.target == excludedModal) {
+                closeExcludedModal();
             }
         };
     </script>
@@ -2040,6 +2115,19 @@
                 <span onclick="closeSheetModal()" style="color: white; font-size: 28px; font-weight: bold; cursor: pointer; transition: all 0.3s;" onmouseover="this.style.transform='scale(1.2)'" onmouseout="this.style.transform='scale(1)'">&times;</span>
             </div>
             <div id="sheetModalBody" style="padding: 25px; max-height: 70vh; overflow-y: auto;">
+                <!-- Content will be loaded here -->
+            </div>
+        </div>
+    </div>
+    
+    <!-- Excluded Records Modal -->
+    <div id="excludedRecordsModal" style="display: none; position: fixed; z-index: 10000; left: 0; top: 0; width: 100%; height: 100%; background-color: rgba(0,0,0,0.5);">
+        <div style="background-color: white; margin: 3% auto; padding: 0; border-radius: 10px; width: 95%; max-width: 1400px; box-shadow: 0 5px 25px rgba(0,0,0,0.3);">
+            <div style="background: linear-gradient(135deg, #757575 0%, #424242 100%); color: white; padding: 20px; border-radius: 10px 10px 0 0; display: flex; justify-content: space-between; align-items: center;">
+                <h2 style="margin: 0; font-size: 20px;">🚫 Excluded Records (Null Credited Transaction ID)</h2>
+                <span onclick="closeExcludedModal()" style="color: white; font-size: 28px; font-weight: bold; cursor: pointer; transition: all 0.3s;" onmouseover="this.style.transform='scale(1.2)'" onmouseout="this.style.transform='scale(1)'">&times;</span>
+            </div>
+            <div id="excludedModalBody" style="padding: 25px; max-height: 75vh; overflow-y: auto;">
                 <!-- Content will be loaded here -->
             </div>
         </div>
