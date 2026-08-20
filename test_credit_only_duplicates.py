@@ -236,6 +236,69 @@ class CreditOnlyDuplicateTests(unittest.TestCase):
                 connection.close()
             self.assertEqual(status, 'completed')
 
+    def test_all_matching_cheque_rows_are_added_even_when_amounts_repeat(self):
+        handle = tempfile.NamedTemporaryFile(suffix='.xlsx', delete=False)
+        workbook_path = handle.name
+        handle.close()
+        cheque_amounts = [50000, 49000, 50000, 50000, 50000, 50000]
+        cheque_columns = [
+            'S No.', 'Acknowledgement No.', 'Account No.',
+            'Transaction Id / UTR Number', 'Account No 2', 'IFSC Code',
+            'Cheque No', 'Withdrawal Date & Time', 'Withdrawal Amount',
+            'Disputed Amount', 'Branch Location',
+        ]
+        cheque_rows = [
+            [
+                index, '31108260194533', '0057041000000564',
+                'ICICR42026081900511569', f'account-{index}', 'JAKA0FATTEH',
+                f'9302{index}', '', amount, amount, 'FATEH KADAL SRINAGAR',
+            ]
+            for index, amount in enumerate(cheque_amounts, start=1)
+        ]
+        source_row = main_rows()[0]
+        source_row[1] = '31108260194533'
+        source_row[6] = '57041000000564'
+        source_row[9] = 'ICICR42026081900511569'
+        source_row[10] = 300000
+        source_row[11] = 300000
+
+        try:
+            with pd.ExcelWriter(workbook_path, engine='openpyxl') as writer:
+                pd.DataFrame([source_row], columns=MAIN_COLUMNS).to_excel(
+                    writer, sheet_name='Money Transfer', index=False
+                )
+                pd.DataFrame(cheque_rows, columns=cheque_columns).to_excel(
+                    writer, sheet_name='Cash Withdrawal through Cheque',
+                    index=False,
+                )
+
+            success, message = app_account.process_excel_file(
+                workbook_path, is_first_file=True
+            )
+            self.assertTrue(success, message)
+        finally:
+            os.unlink(workbook_path)
+
+        breakdown = app_account.get_transaction_breakdown(
+            'ICICR42026081900511569'
+        )
+        self.assertEqual(len(breakdown), 6)
+        self.assertEqual(sum(item['amount'] for item in breakdown), 299000)
+
+        rows = app_account.app.test_client().get(
+            '/api/all-transactions'
+        ).get_json()
+        account = next(
+            row for row in rows
+            if str(row['account_number']).endswith('0564')
+        )
+        self.assertEqual(account['total_credited'], 300000)
+        self.assertEqual(account['updated_amount'], 299000)
+        self.assertIn(
+            'Cash Withdrawal through Cheque: ₹299,000.00',
+            account['breakdown_by_sheet'],
+        )
+
 
 if __name__ == '__main__':
     unittest.main()
