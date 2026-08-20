@@ -36,6 +36,7 @@ from summary_database import (
 
 LOGGER = logging.getLogger("account_summary_batch")
 SUPPORTED_EXTENSIONS = {".xlsx", ".xlsm", ".xltx", ".xltm"}
+SUMMARY_LOGIC_VERSION = "credit-only-duplicates-v1"
 
 
 def configure_logging(database_path: Path, verbose: bool = False) -> None:
@@ -272,6 +273,38 @@ def reset_all_files(database_path: Path) -> int:
         connection.close()
 
 
+def requeue_for_summary_logic_upgrade(database_path: Path) -> int:
+    """Recalculate stored summaries once when aggregation rules change."""
+    connection = connect_database(database_path)
+    try:
+        current_row = connection.execute(
+            "SELECT value FROM schema_metadata WHERE key = ?",
+            ("account_summary_logic_version",),
+        ).fetchone()
+        current_version = current_row["value"] if current_row else None
+        if current_version == SUMMARY_LOGIC_VERSION:
+            return 0
+
+        with connection:
+            cursor = connection.execute(
+                """
+                UPDATE source_files
+                SET status = 'pending', attempts = 0, error_message = NULL
+                """
+            )
+            connection.execute(
+                """
+                INSERT INTO schema_metadata(key, value)
+                VALUES (?, ?)
+                ON CONFLICT(key) DO UPDATE SET value = excluded.value
+                """,
+                ("account_summary_logic_version", SUMMARY_LOGIC_VERSION),
+            )
+        return cursor.rowcount
+    finally:
+        connection.close()
+
+
 def claim_next_file(
     database_path: Path,
     *,
@@ -398,6 +431,7 @@ def release_app_memory() -> None:
     app_account.debited_trans_id_map = {}
     app_account.credited_trans_id_map = {}
     app_account.breakdown_map = {}
+    app_account.last_duplicate_transaction_details = []
     gc.collect()
 
 
@@ -597,6 +631,14 @@ def main() -> int:
                 discovery["new"],
                 discovery["changed"],
             )
+            upgraded = requeue_for_summary_logic_upgrade(database_path)
+            if upgraded:
+                LOGGER.info(
+                    "Summary logic upgraded to %s; queued %s file(s) for "
+                    "credit-only duplicate recalculation.",
+                    SUMMARY_LOGIC_VERSION,
+                    upgraded,
+                )
             if args.reprocess_all:
                 LOGGER.info(
                     "Queued %s file(s) for full reprocessing.",

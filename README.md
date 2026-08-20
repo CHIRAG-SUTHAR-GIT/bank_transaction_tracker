@@ -48,21 +48,21 @@ A comprehensive Flask-based financial transaction analysis and reporting system 
 - POS transactions with merchant details
 - Transaction holds and frozen account tracking
 - Micro-transactions (< ₹500) grouping
-- Automatic account number deduplication
+- Every matching cash-out source row remains counted
 - Disputed amount tracking
 
 ### 4. Comprehensive Reporting
 - Excel-based account summary reports
 - Bank-wise transaction analysis
 - Flow diagram HTML exports
-- Duplicate transaction detection and logging
+- Credit-only duplicate detection and logging
 - Audit trail with detailed logging
 - Real-time dashboard integration
 
 ### 5. Batch Processing Engine
 - Overnight scheduled batch processing
 - Resumable multi-workbook processing
-- Deduplication with audit logging
+- Credit-only duplicate handling in every summary path
 - Parallel processing support (4 processes)
 - SQLite database for consolidated data
 - Workbook cache management
@@ -139,7 +139,7 @@ START_OVERNIGHT_AND_DASHBOARD.bat
 This will:
 - Process all workbooks in `C:\Users\admin\Desktop\bank_trails`
 - Create a consolidated SQLite database
-- Remove duplicate transactions automatically
+- Retain every source row for debit and other-sheet calculations
 - Generate a summary dashboard
 - Export results to Excel
 
@@ -150,24 +150,26 @@ Edit `batch_account_summaries.py` to customize:
 - Database location
 - Output file format
 - Processing threads
-- Deduplication rules
+- Credited-transaction identity rules
 
-### Deduplication Logic
+### Credit-Only Duplicate Logic
 
-The batch processor automatically deduplicates transactions matched by:
+Only **Total Credited Amount** ignores later rows matched by:
 - **Acknowledgement Number (ACK)**
 - **Credited Transaction ID**
 - **Last 4 digits of Credited Account**
 
-When duplicates are found:
-- First occurrence is retained
-- Subsequent occurrences are logged in **Duplicate Entry Info**
-- Disputed amounts are accumulated
-- Audit counts are recorded in SQLite
+When a repeated credit identity is found:
+- The first row contributes to **Total Credited Amount**
+- Later matching rows are reported in **Duplicate Entry Info**
+- Every row still contributes normally to debited totals
+- Every distinct matching row in other sheets still contributes to recovery
+- The source rows are never removed from the loaded data
 
-For a complete reprocessing without cache:
-```batch
-REPROCESS_ALL_STRICT_ONCE.bat
+The overnight worker detects this summary-logic version and queues existing
+SQLite summaries for one automatic rebuild. A manual rebuild is also available:
+```powershell
+python batch_account_summaries.py --reprocess-all
 ```
 
 ## 📁 File Structure
@@ -212,7 +214,7 @@ LOG_LEVEL=INFO
 
 The system uses SQLite for consolidated data storage. Key tables:
 - `account_summaries`: Consolidated account-wise summaries
-- `deduplication_audit`: Duplicate transaction logs
+- `schema_metadata`: Schema and summary-logic versions
 - `processing_log`: Batch processing audit trail
 - `workbook_cache`: Processed workbook metadata
 
@@ -292,10 +294,10 @@ Solution: Verify input directory path in configuration
          Check that Excel file is in correct location
 ```
 
-**Issue**: Duplicate transactions not removed
+**Issue**: Old summaries still show the previous duplicate totals
 ```
-Solution: Run REPROCESS_ALL_STRICT_ONCE.bat for full rebuild
-         Check deduplication rules in summary_database.py
+Solution: Run python batch_account_summaries.py --reprocess-all
+         The database file stays local under data/ and is not committed
 ```
 
 **Issue**: Flask port already in use

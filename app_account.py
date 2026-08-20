@@ -3,6 +3,7 @@ import pandas as pd
 import os
 import json
 import io
+import re
 from datetime import datetime
 from io import BytesIO
 
@@ -23,6 +24,120 @@ credited_acc_map = {}
 debited_trans_id_map = {}
 credited_trans_id_map = {}
 breakdown_map = {}
+
+# Duplicate handling is credit-only. Every source row stays in df_main so
+# debit totals, other-sheet matching, recovery values, flow calculations, and
+# transaction lookup always see the complete input.
+last_duplicate_transaction_details = []
+
+
+def _identity_text(value):
+    """Normalize an Excel value for a stable credited-transaction identity."""
+    if pd.isna(value):
+        return ''
+    if isinstance(value, pd.Timestamp):
+        return value.isoformat()
+    if isinstance(value, float) and value.is_integer():
+        value = int(value)
+    text = re.sub(r'\s+', ' ', str(value).strip())
+    if text.lower() in ('nan', 'none', 'null'):
+        return ''
+    if text.endswith('.0') and text[:-2].isdigit():
+        text = text[:-2]
+    return text.upper()
+
+
+def _account_last_four(value):
+    """Match full and masked credited accounts by their last four characters."""
+    characters = re.sub(r'[^A-Z0-9]', '', _identity_text(value))
+    return characters[-4:] if len(characters) > 4 else characters
+
+
+def _is_valid_credited_transaction_id(value):
+    """Return whether a value represents a real credited transaction ID."""
+    return _identity_text(value) not in ('', '-', 'UNKNOWN')
+
+
+def build_credited_transaction_identity(row):
+    """Return ACK + credited transaction ID + credited-account last four."""
+    if len(row) < 10:
+        return None
+    acknowledgement = _identity_text(row.iloc[1])
+    credited_account_last_four = _account_last_four(row.iloc[6])
+    credited_transaction_id = _identity_text(row.iloc[9])
+    if not (
+        acknowledgement
+        and credited_account_last_four
+        and _is_valid_credited_transaction_id(credited_transaction_id)
+    ):
+        return None
+    return (
+        acknowledgement,
+        credited_transaction_id,
+        credited_account_last_four,
+    )
+
+
+def credited_rows_for_totals(dataframe):
+    """Return the credit-counting view without removing any source rows.
+
+    The first row for each credited identity contributes to Total Credited
+    Amount. Later matches do not contribute to that one total, but remain in
+    the original dataframe for every debit and other-sheet calculation.
+    """
+    if dataframe is None:
+        return dataframe, 0
+    if dataframe.empty:
+        result = dataframe.copy()
+        result.attrs['duplicate_credit_details'] = []
+        return result, 0
+
+    seen = set()
+    keep_positions = []
+    duplicate_groups = {}
+    excluded_count = 0
+    for position, (_, row) in enumerate(dataframe.iterrows()):
+        identity = build_credited_transaction_identity(row)
+        if identity is None or identity not in seen:
+            if identity is not None:
+                seen.add(identity)
+            keep_positions.append(position)
+            continue
+
+        excluded_count += 1
+        detail = duplicate_groups.setdefault(
+            identity,
+            {
+                'acknowledgement_no': identity[0],
+                'credited_transaction_id': identity[1],
+                'credited_account_last_four': identity[2],
+                'duplicate_credit_rows_excluded': 0,
+                'excluded_credited_amount': 0.0,
+            },
+        )
+        detail['duplicate_credit_rows_excluded'] += 1
+        if len(row) > 11:
+            detail['excluded_credited_amount'] += clean_amount(row.iloc[11])
+
+    result = dataframe.iloc[keep_positions].copy()
+    result.attrs['duplicate_credit_details'] = list(duplicate_groups.values())
+    return result, excluded_count
+
+
+def format_duplicate_credit_note(detail):
+    """Explain that only the credited amount was excluded."""
+    count = int(detail.get('duplicate_credit_rows_excluded', 0) or 0)
+    row_word = 'row' if count == 1 else 'rows'
+    return (
+        f"First matching credit kept; later {count} duplicate credit {row_word} "
+        "NOT COUNTED in Total Credited Amount. "
+        f"Credited TID: {detail.get('credited_transaction_id') or 'N/A'}; "
+        "credited A/c last 4: "
+        f"{detail.get('credited_account_last_four') or 'N/A'}; "
+        "credited amount excluded: INR "
+        f"{float(detail.get('excluded_credited_amount', 0) or 0):,.2f}. "
+        "Debit and other-sheet matching remain counted."
+    )
 
 def rebuild_maps():
     """Rebuild lookup maps for faster processing"""
@@ -71,20 +186,11 @@ def rebuild_maps():
     
     # Rebuild breakdown map for other sheets (by Trans ID AND Account Number)
     breakdown_map = {}
-    others_less_500_trans_ids = set()  # Track which trans IDs appear in "Others Less Than 500"
-    
+
     if df_other_sheets:
-        # First pass: identify transaction IDs in "Others Less Than 500" sheet
-        for sheet_name, sheet_info in df_other_sheets.items():
-            if 'others less than 500' in sheet_name.lower() or 'others less then 500' in sheet_name.lower():
-                df = sheet_info['data']
-                if len(df.columns) > 3:
-                    for _, row in df.iterrows():
-                        trans_id = str(row.iloc[3]).strip() if pd.notna(row.iloc[3]) else ''
-                        if trans_id:
-                            others_less_500_trans_ids.add(trans_id)
-        
-        # Second pass: build breakdown map with special handling for "Others Less Than 500"
+        # Keep every other-sheet source row. The breakdown reader only guards
+        # against returning the same physical row twice when it is reached by
+        # both a transaction-ID lookup and an account-number lookup.
         for sheet_name, sheet_info in df_other_sheets.items():
             df = sheet_info['data']
             amount_col = sheet_info['amount_col']
@@ -92,9 +198,6 @@ def rebuild_maps():
             is_others_less_500 = 'others less than 500' in sheet_name.lower() or 'others less then 500' in sheet_name.lower()
             
             if len(df.columns) > 3:
-                processed_trans_ids_in_sheet = set()  # Track which trans IDs we've already added for this sheet
-                processed_accounts_in_sheet = set()  # Track which account numbers we've already added for this sheet
-                
                 for row_idx, row in df.iterrows():
                     trans_id = str(row.iloc[3]).strip() if pd.notna(row.iloc[3]) else ''
                     
@@ -106,33 +209,28 @@ def rebuild_maps():
                     if not account_no and len(row) > 1:
                         account_no = str(row.iloc[1]).strip() if pd.notna(row.iloc[1]) else ''
                         
-                    # Create shared item to avoid duplicate creation
-                    shared_item = None
-                    if not is_others_less_500 and len(row) > amount_col:
+                    # This special sheet keeps its established flat INR 500
+                    # value, but every physical row now contributes.
+                    if is_others_less_500:
+                        amount = 500.0
+                    elif len(row) > amount_col:
                         amount = clean_amount(row.iloc[amount_col])
-                        if amount > 0:
-                            shared_item = {
-                                'sheet': sheet_name,
-                                'amount': amount,
-                                'row_idx': row_idx
-                            }
+                    else:
+                        amount = 0.0
+                    shared_item = None
+                    if amount > 0:
+                        shared_item = {
+                            'sheet': sheet_name,
+                            'amount': amount,
+                            'row_idx': row_idx
+                        }
                     
                     # Process by Transaction ID
                     if trans_id:
                         if trans_id not in breakdown_map:
                             breakdown_map[trans_id] = []
                         
-                        # Special handling for "Others Less Than 500" sheet
-                        if is_others_less_500:
-                            # Only add ₹500 once per transaction ID, regardless of how many entries
-                            if trans_id not in processed_trans_ids_in_sheet:
-                                breakdown_map[trans_id].append({
-                                    'sheet': sheet_name,
-                                    'amount': 500.0  # Always ₹500 for this sheet
-                                })
-                                processed_trans_ids_in_sheet.add(trans_id)
-                        elif shared_item:
-                            # Normal handling for other sheets - add ALL entries (no deduplication)
+                        if shared_item:
                             breakdown_map[trans_id].append(shared_item)
                     
                     # ALSO Process by Account Number (NEW LOGIC)
@@ -140,17 +238,7 @@ def rebuild_maps():
                         if account_no not in breakdown_map:
                             breakdown_map[account_no] = []
                         
-                        # Special handling for "Others Less Than 500" sheet
-                        if is_others_less_500:
-                            # Only add ₹500 once per account number, regardless of how many entries
-                            if account_no not in processed_accounts_in_sheet:
-                                breakdown_map[account_no].append({
-                                    'sheet': sheet_name,
-                                    'amount': 500.0  # Always ₹500 for this sheet
-                                })
-                                processed_accounts_in_sheet.add(account_no)
-                        elif shared_item:
-                            # Normal handling for other sheets - add ALL entries (no deduplication)
+                        if shared_item:
                             breakdown_map[account_no].append(shared_item)
 
 
@@ -168,7 +256,12 @@ def clean_amount(value):
 def process_excel_file(filepath, is_first_file=False):
     """Process Excel file and merge with existing data"""
     global df_main, df_other_sheets, uploaded_files_count
-    
+    global last_duplicate_transaction_details
+
+    if is_first_file or df_main is None:
+        last_duplicate_transaction_details = []
+
+    xl = None
     try:
         xl = pd.ExcelFile(filepath)
         
@@ -191,9 +284,12 @@ def process_excel_file(filepath, is_first_file=False):
         df_new_main = pd.read_excel(xl, sheet_name=money_transfer_sheet)
         print(f"DEBUG: Loaded main sheet with {len(df_new_main)} rows")
         
-        # Deduplicate only perfectly identical rows to avoid losing unique debited info
-        df_new_main = df_new_main.drop_duplicates(keep='first')
-        print(f"DEBUG: After deduplication, main sheet has {len(df_new_main)} rows")
+        # Never remove source rows here. Duplicate handling is applied only to
+        # the credited-amount view used by summary calculations.
+        print(
+            "DEBUG: All main-sheet rows retained for debit and other-sheet "
+            "processing"
+        )
         
         # Merge or initialize main dataframe
         if is_first_file or df_main is None:
@@ -201,10 +297,20 @@ def process_excel_file(filepath, is_first_file=False):
             df_other_sheets = {}
         else:
             df_main = pd.concat([df_main, df_new_main], ignore_index=True)
-            # Deduplicate again after merge to remove perfectly identical rows
-            df_main = df_main.drop_duplicates(keep='first')
-        
-        # Reset index to ensure it's contiguous after dropping duplicates
+
+        credit_counting_rows, duplicate_credit_count = credited_rows_for_totals(
+            df_main
+        )
+        last_duplicate_transaction_details = credit_counting_rows.attrs.get(
+            'duplicate_credit_details', []
+        )
+        print(
+            "DEBUG: Credit-only duplicate handling excludes "
+            f"{duplicate_credit_count} later credited amount(s); all source "
+            "rows remain available elsewhere"
+        )
+
+        # Reset index after merging uploads; no source rows were removed.
         df_main = df_main.reset_index(drop=True)
         
         # Load and merge other sheets
@@ -242,6 +348,9 @@ def process_excel_file(filepath, is_first_file=False):
         
     except Exception as e:
         return False, f"Error: {str(e)}"
+    finally:
+        if xl is not None:
+            xl.close()
 
 def get_transaction_breakdown(trans_id, account_no=None):
     """Get breakdown from other sheets - ONLY NON-ZERO amounts - Optimized with breakdown_map
@@ -250,24 +359,26 @@ def get_transaction_breakdown(trans_id, account_no=None):
     1. Transaction ID (trans_id)
     2. Account Number (account_no) if provided
     
-    Returns combined results from both lookups (deduplicated by sheet+amount)
+    Returns every matching source row. If the same physical row is reached by
+    both transaction ID and account number, it is returned once.
     """
     breakdown_items = []
-    seen_items = set()  # Track (sheet, amount) to avoid duplicates
+    seen_source_rows = set()
+
+    def append_source_row(item):
+        # This prevents a lookup join from returning the same physical row
+        # twice; it never collapses distinct source rows with equal amounts.
+        source_key = (item['sheet'], item.get('row_idx', id(item)))
+        if source_key not in seen_source_rows:
+            breakdown_items.append(item)
+            seen_source_rows.add(source_key)
     
     # Search by Transaction ID
     if trans_id:
         trans_id_str = str(trans_id).strip()
         if trans_id_str in breakdown_map:
             for item in breakdown_map[trans_id_str]:
-                sheet_lower = item['sheet'].lower()
-                if 'atm' in sheet_lower:
-                    key = (item['sheet'], item.get('row_idx', id(item)))
-                else:
-                    key = (item['sheet'], item['amount'])
-                if key not in seen_items:
-                    breakdown_items.append(item)
-                    seen_items.add(key)
+                append_source_row(item)
     
     # Search by Account Number (if provided)
     if account_no:
@@ -275,14 +386,7 @@ def get_transaction_breakdown(trans_id, account_no=None):
         if account_no_str and account_no_str not in ['nan', 'none', '']:
             if account_no_str in breakdown_map:
                 for item in breakdown_map[account_no_str]:
-                    sheet_lower = item['sheet'].lower()
-                    if 'atm' in sheet_lower:
-                        key = (item['sheet'], item.get('row_idx', id(item)))
-                    else:
-                        key = (item['sheet'], item['amount'])
-                    if key not in seen_items:
-                        breakdown_items.append(item)
-                        seen_items.add(key)
+                    append_source_row(item)
     
     return breakdown_items
 
@@ -500,8 +604,10 @@ def build_hierarchical_data(parent_id=None, layer=1, parent_path="", level=0, vi
             
             row_status_map[idx] = final_status
         
-        # Now group by (Debited Account, Credited Account, Status)
-        # IMPORTANT: Track unique transactions to avoid double-counting duplicates
+        # Now group by (Debited Account, Credited Account, Status). Only column
+        # 11's credited/disputed total uses the credit-only duplicate view.
+        credit_counting_df, _ = credited_rows_for_totals(df_main)
+        credit_counting_indices = set(credit_counting_df.index)
         grouped_data = {}
         for idx, row in df_main.iterrows():
             # FILTER: Skip rows with null/empty credited transaction ID
@@ -523,35 +629,14 @@ def build_hierarchical_data(parent_id=None, layer=1, parent_path="", level=0, vi
                     'total_disputed': 0,
                     'total_transaction': 0,
                     'status': status,
-                    'seen_transactions': set()  # Track unique transaction signatures
                 }
-            
-            # Create a signature for this transaction to detect true duplicates
-            # Match: last 4 digits of account numbers + all other fields
-            debited_trans_id = str(row.iloc[3]).strip() if pd.notna(row.iloc[3]) else ''
-            bank = str(row.iloc[4]).strip() if pd.notna(row.iloc[4]) else ''
-            layer = str(int(row.iloc[5])) if pd.notna(row.iloc[5]) else ''
-            ifsc = str(row.iloc[7]).strip() if pd.notna(row.iloc[7]) else ''
-            trans_date = str(row.iloc[8]).strip() if pd.notna(row.iloc[8]) else ''
+
             disputed_amt = clean_amount(row.iloc[11])
             transaction_amt = clean_amount(row.iloc[10])
-            
-            # Get last 4 digits of account numbers
-            debited_acc_last4 = debited_account[-4:] if len(debited_account) >= 4 else debited_account
-            credited_acc_last4 = credited_account[-4:] if len(credited_account) >= 4 else credited_account
-            
-            # Create signature with last 4 digits of accounts + all other fields
-            trans_signature = f"{debited_acc_last4}|{debited_trans_id}|{bank}|{layer}|{credited_acc_last4}|{ifsc}|{trans_date}|{credited_trans_id}|{transaction_amt}|{disputed_amt}"
-            
-            # Only add amounts if this exact transaction hasn't been seen before
-            # This prevents double-counting true duplicates while allowing multiple
-            # legitimate transactions between the same account pair
-            if trans_signature not in grouped_data[key]['seen_transactions']:
-                grouped_data[key]['seen_transactions'].add(trans_signature)
+
+            if idx in credit_counting_indices:
                 grouped_data[key]['total_disputed'] += disputed_amt
-                grouped_data[key]['total_transaction'] += transaction_amt
-            else:
-                print(f"DEBUG: Skipping duplicate transaction: {trans_signature}")
+            grouped_data[key]['total_transaction'] += transaction_amt
             
             grouped_data[key]['indices'].append(idx)
             grouped_data[key]['rows'].append(row)
@@ -1113,17 +1198,6 @@ def get_all_transactions():
 
     all_account_summary = []
 
-    # Helper function to get last 4 digits of account number
-    def get_last_4_digits(account_str):
-        if pd.isna(account_str): return ''
-        s = str(account_str).strip()
-        if s.lower() in ('nan', 'none', ''): return ''
-        if s.endswith('.0'):
-            s = s[:-2]
-        # Remove leading zeros and get last 4 digits
-        s = s.lstrip('0') or '0'
-        return s[-4:] if len(s) >= 4 else s
-
     # Helper function to strip leading zeros from account numbers
     def strip_account(x):
         if pd.isna(x): return ''
@@ -1150,6 +1224,11 @@ def get_all_transactions():
         if df_ack_main.empty:
             continue
 
+        credit_counting_df, _ = credited_rows_for_totals(df_ack_main)
+        credit_counting_series = credit_counting_df.iloc[:, 6].apply(
+            strip_account
+        )
+
         all_accounts = set(debited_series[debited_series != ''].unique()) | set(credited_series[credited_series != ''].unique())
 
         # Store the longest string variant for each account
@@ -1166,6 +1245,9 @@ def get_all_transactions():
 
             # Credited stats (Money coming IN)
             credited_rows = df_ack_main[credited_series == acc]
+            credited_rows_for_total = credit_counting_df[
+                credit_counting_series == acc
+            ]
 
             total_credited = 0
             credited_transaction_ids = []
@@ -1176,14 +1258,17 @@ def get_all_transactions():
                 if not credited_trans_id or credited_trans_id.lower() in ('nan', 'none', '', '-', 'null'):
                     continue
                     
-                amt = clean_amount(row.iloc[11])
                 trans_id = credited_trans_id
 
                 # Collect credited transaction IDs
                 if trans_id and trans_id.lower() not in ('', 'nan', 'none', 'unknown', '-'):
                     credited_transaction_ids.append(trans_id)
 
-                total_credited += amt
+            total_credited = sum(
+                clean_amount(row.iloc[11])
+                for _, row in credited_rows_for_total.iterrows()
+                if _is_valid_credited_transaction_id(row.iloc[9])
+            )
 
             # Join credited transaction IDs
             unique_credited_trans_ids = list(set(credited_transaction_ids))
@@ -1290,16 +1375,6 @@ def get_all_transactions_by_id():
 
     all_transaction_summary = []
 
-    # Helper function to get last 4 digits of account number
-    def get_last_4_digits(account_str):
-        if pd.isna(account_str): return ''
-        s = str(account_str).strip()
-        if s.lower() in ('nan', 'none', ''): return ''
-        if s.endswith('.0'):
-            s = s[:-2]
-        s = s.lstrip('0') or '0'
-        return s[-4:] if len(s) >= 4 else s
-
     for current_ack in sorted(all_acks):
         if current_ack != 'UNKNOWN':
             ack_mask = df_main.iloc[:, 1].astype(str).str.strip() == current_ack
@@ -1309,6 +1384,18 @@ def get_all_transactions_by_id():
 
         if df_ack_main.empty:
             continue
+
+        credit_counting_df, _ = credited_rows_for_totals(df_ack_main)
+        credit_counting_tid_series = credit_counting_df.iloc[:, 9].apply(
+            _identity_text
+        )
+        duplicate_details_by_transaction_id = {}
+        for detail in credit_counting_df.attrs.get(
+            'duplicate_credit_details', []
+        ):
+            duplicate_details_by_transaction_id.setdefault(
+                detail['credited_transaction_id'], []
+            ).append(format_duplicate_credit_note(detail))
 
         # Collect all unique credited transaction IDs (column 9 only)
         all_trans_ids = set()
@@ -1345,52 +1432,18 @@ def get_all_transactions_by_id():
             bank_name_str = "; ".join(sorted(bank_names)) if bank_names else "N/A"
             debited_trans_id_str = "; ".join(sorted(debited_trans_ids)) if debited_trans_ids else "None"
 
-            # Calculate credited amount with duplicate detection
-            total_credited = 0
-            duplicate_details = []
-            covered_keys = set()
-            
-            # Create a list to track all transactions for duplicate detection
-            all_transactions_for_duplicate_check = []
-            
-            for _, check_row in df_ack_main.iterrows():
-                check_ack = str(check_row.iloc[1]).strip() if pd.notna(check_row.iloc[1]) else ''
-                check_credited_acc = str(check_row.iloc[6]).strip() if pd.notna(check_row.iloc[6]) else ''
-                check_credited_trans_id = str(check_row.iloc[9]).strip() if pd.notna(check_row.iloc[9]) else ''
-                check_disputed_amt = clean_amount(check_row.iloc[11])
-                
-                if check_ack == current_ack and check_credited_trans_id == trans_id:
-                    all_transactions_for_duplicate_check.append({
-                        'ack': check_ack,
-                        'credited_acc_last4': get_last_4_digits(check_credited_acc),
-                        'credited_trans_id': check_credited_trans_id,
-                        'disputed_amt': check_disputed_amt,
-                        'full_row': check_row
-                    })
-
-            for _, row in credited_rows.iterrows():
-                amt = clean_amount(row.iloc[11])
-                current_acc_last4 = get_last_4_digits(row.iloc[6])
-
-                duplicate_key = (current_ack, trans_id, f"{amt:.2f}", current_acc_last4)
-                
-                # Count how many times this combination appears
-                duplicate_count = 0
-                for trans in all_transactions_for_duplicate_check:
-                    if (trans['ack'] == current_ack and 
-                        trans['credited_trans_id'] == trans_id and 
-                        f"{trans['disputed_amt']:.2f}" == f"{amt:.2f}" and
-                        trans['credited_acc_last4'] == current_acc_last4):
-                        duplicate_count += 1
-                
-                if duplicate_key not in covered_keys:
-                    covered_keys.add(duplicate_key)
-                    total_credited += amt
-                    
-                    if duplicate_count > 1:
-                        duplicate_details.append(f"₹{amt:,.2f} (TID: {trans_id}, Last4: {current_acc_last4}, Count: {duplicate_count})")
-                else:
-                    duplicate_details.append(f"₹{amt:,.2f} (Duplicate: TID: {trans_id}, Last4: {current_acc_last4})")
+            # Duplicate identities affect credited aggregation only.
+            transaction_key = _identity_text(trans_id)
+            credited_rows_for_total = credit_counting_df[
+                credit_counting_tid_series == transaction_key
+            ]
+            total_credited = sum(
+                clean_amount(row.iloc[11])
+                for _, row in credited_rows_for_total.iterrows()
+            )
+            duplicate_details = duplicate_details_by_transaction_id.get(
+                transaction_key, []
+            )
 
             # Calculate outgoing/debited amount for the current credited transaction ID.
             # This should be based on child rows where the current transaction ID appears
@@ -2184,23 +2237,8 @@ def download_account_summary():
                 s = s[:-2]
             return s.lstrip('0') or '0'
         
-        # Helper function to get last 4 digits of account number
-        def get_last_4_digits(account_str):
-            if pd.isna(account_str): return ''
-            s = str(account_str).strip()
-            if s.lower() in ('nan', 'none', ''): return ''
-            if s.endswith('.0'):
-                s = s[:-2]
-            # Remove leading zeros and get last 4 digits
-            s = s.lstrip('0') or '0'
-            return s[-4:] if len(s) >= 4 else s
-            
         debited_series_full = df_main.iloc[:, 2].apply(strip_account)
         credited_series_full = df_main.iloc[:, 6].apply(strip_account)
-        
-        # Pre-calculate duplicates based on Ack No (1), Credited Account (6), Credited Transaction ID (9) and Disputed Amount (11)
-        # We find duplicates by checking combinations of these 4 columns
-        # Deduplication is now handled locally within the account loop to ensure accuracy for different columns
 
         for current_ack in sorted(all_acks):
             if current_ack != 'UNKNOWN':
@@ -2214,6 +2252,18 @@ def download_account_summary():
                 credited_series = credited_series_full
                 
             if df_ack_main.empty: continue
+
+            credit_counting_df, _ = credited_rows_for_totals(df_ack_main)
+            credit_counting_series = credit_counting_df.iloc[:, 6].apply(
+                strip_account
+            )
+            duplicate_notes_by_credited_account = {}
+            for detail in credit_counting_df.attrs.get(
+                'duplicate_credit_details', []
+            ):
+                duplicate_notes_by_credited_account.setdefault(
+                    detail['credited_account_last_four'], []
+                ).append(format_duplicate_credit_note(detail))
             
             all_accounts = set(debited_series[debited_series != ''].unique()) | set(credited_series[credited_series != ''].unique())
             
@@ -2249,108 +2299,21 @@ def download_account_summary():
                 
                 # Credited stats (Money coming IN to this account)
                 credited_rows = df_ack_main[credited_series == acc]
-                
-                total_credited = 0
-                duplicate_details = []
+                credited_rows_for_total = credit_counting_df[
+                    credit_counting_series == acc
+                ]
                 credited_transaction_ids = []
-                # New duplicate detection logic: match ack, credited_trans_id, disputed_amt, and last 4 digits of account
-                covered_keys = set()
-                
-                # OPTIMIZED: Pre-build duplicate count lookup dictionary for this acknowledgment
-                # New logic: Check all fields - last 4 digits of accounts + all other fields
-                duplicate_count_map = {}
-                for _, check_row in df_ack_main.iterrows():
-                    check_ack = str(check_row.iloc[1]).strip() if pd.notna(check_row.iloc[1]) else ''
-                    check_debited_acc = str(check_row.iloc[2]).strip() if pd.notna(check_row.iloc[2]) else ''
-                    check_debited_trans_id = str(check_row.iloc[3]).strip() if pd.notna(check_row.iloc[3]) else ''
-                    check_bank = str(check_row.iloc[4]).strip() if pd.notna(check_row.iloc[4]) else ''
-                    check_layer = str(int(check_row.iloc[5])) if pd.notna(check_row.iloc[5]) else ''
-                    check_credited_acc = str(check_row.iloc[6]).strip() if pd.notna(check_row.iloc[6]) else ''
-                    check_ifsc = str(check_row.iloc[7]).strip() if pd.notna(check_row.iloc[7]) else ''
-                    check_trans_date = str(check_row.iloc[8]).strip() if pd.notna(check_row.iloc[8]) else ''
-                    check_credited_trans_id = str(check_row.iloc[9]).strip() if pd.notna(check_row.iloc[9]) else ''
-                    check_transaction_amt = clean_amount(check_row.iloc[10])
-                    check_disputed_amt = clean_amount(check_row.iloc[11])
-                    
-                    if check_ack == current_ack and check_credited_trans_id and check_credited_trans_id.lower() not in ('', 'nan', 'none', 'unknown', '-'):
-                        # Get last 4 digits of both accounts
-                        check_deb_acc_last4 = get_last_4_digits(check_debited_acc)
-                        check_cre_acc_last4 = get_last_4_digits(check_credited_acc)
-                        
-                        # Create comprehensive signature
-                        duplicate_key = (
-                            check_ack,
-                            check_deb_acc_last4,
-                            check_debited_trans_id,
-                            check_bank,
-                            check_layer,
-                            check_cre_acc_last4,
-                            check_ifsc,
-                            check_trans_date,
-                            check_credited_trans_id,
-                            f"{check_transaction_amt:.2f}",
-                            f"{check_disputed_amt:.2f}"
-                        )
-                        duplicate_count_map[duplicate_key] = duplicate_count_map.get(duplicate_key, 0) + 1
-                
                 for _, row in credited_rows.iterrows():
-                    amt = clean_amount(row.iloc[11])
                     trans_id = str(row.iloc[9]).strip() if pd.notna(row.iloc[9]) else ''
-                    
-                    # Get all fields for comprehensive duplicate check
-                    deb_acc = str(row.iloc[2]).strip() if pd.notna(row.iloc[2]) else ''
-                    deb_trans_id = str(row.iloc[3]).strip() if pd.notna(row.iloc[3]) else ''
-                    bank = str(row.iloc[4]).strip() if pd.notna(row.iloc[4]) else ''
-                    layer = str(int(row.iloc[5])) if pd.notna(row.iloc[5]) else ''
-                    cre_acc = str(row.iloc[6]).strip() if pd.notna(row.iloc[6]) else ''
-                    ifsc = str(row.iloc[7]).strip() if pd.notna(row.iloc[7]) else ''
-                    trans_date = str(row.iloc[8]).strip() if pd.notna(row.iloc[8]) else ''
-                    transaction_amt = clean_amount(row.iloc[10])
-                    
-                    # Get last 4 digits
-                    deb_acc_last4 = get_last_4_digits(deb_acc)
-                    cre_acc_last4 = get_last_4_digits(cre_acc)
-                    
-                    # Collect credited transaction IDs
-                    if trans_id and trans_id.lower() not in ('', 'nan', 'none', 'unknown', '-'):
+                    if _is_valid_credited_transaction_id(trans_id):
                         credited_transaction_ids.append(trans_id)
-                    
-                    # If Transaction ID is valid, we apply the new identity rule for deduplication
-                    if trans_id.lower() in ('', 'nan', 'none', 'unknown', '-'):
-                        total_credited += amt
-                    else:
-                        # New comprehensive duplicate detection logic
-                        duplicate_key = (
-                            current_ack,
-                            deb_acc_last4,
-                            deb_trans_id,
-                            bank,
-                            layer,
-                            cre_acc_last4,
-                            ifsc,
-                            trans_date,
-                            trans_id,
-                            f"{transaction_amt:.2f}",
-                            f"{amt:.2f}"
-                        )
-                        
-                        # Get duplicate count from pre-built map
-                        duplicate_count = duplicate_count_map.get(duplicate_key, 1)
-                        
-                        if duplicate_key not in covered_keys:
-                            covered_keys.add(duplicate_key)
-                            total_credited += amt
-                            
-                            # If this appears more than once, record the duplicates
-                            if duplicate_count > 1:
-                                d_bank = bank if bank else "Unknown Bank"
-                                duplicate_details.append(f"₹{amt:,.2f} (TID: {trans_id}, Last4: {cre_acc_last4}, Count: {duplicate_count})")
-                        else:
-                            # This is a duplicate based on new logic - don't add to total but record it
-                            d_bank = bank if bank else "Unknown Bank"
-                            duplicate_details.append(f"₹{amt:,.2f} (Duplicate: TID: {trans_id}, Last4: {cre_acc_last4})")
-                
-                # Remove duplicates and join credited transaction IDs
+
+                total_credited = sum(
+                    clean_amount(row.iloc[11])
+                    for _, row in credited_rows_for_total.iterrows()
+                )
+
+                # Display each credited transaction ID once; source rows remain intact.
                 unique_credited_trans_ids = list(set(credited_transaction_ids))
                 credited_trans_id_str = "; ".join(unique_credited_trans_ids) if unique_credited_trans_ids else "None"
                 
@@ -2414,6 +2377,11 @@ def download_account_summary():
                     summary_status = 'COMPLETED'
                 
                 # Duplicate information string
+                duplicate_details = []
+                if not credited_rows.empty:
+                    duplicate_details = duplicate_notes_by_credited_account.get(
+                        _account_last_four(display_acc), []
+                    )
                 duplicate_info_str = " | ".join(duplicate_details) if duplicate_details else "None"
 
                 all_account_summary.append({
@@ -2608,16 +2576,6 @@ def download_transaction_id_summary():
 
         all_transaction_summary = []
 
-        # Helper function to get last 4 digits of account number
-        def get_last_4_digits(account_str):
-            if pd.isna(account_str): return ''
-            s = str(account_str).strip()
-            if s.lower() in ('nan', 'none', ''): return ''
-            if s.endswith('.0'):
-                s = s[:-2]
-            s = s.lstrip('0') or '0'
-            return s[-4:] if len(s) >= 4 else s
-
         for current_ack in sorted(all_acks):
             if current_ack != 'UNKNOWN':
                 ack_mask = df_main.iloc[:, 1].astype(str).str.strip() == current_ack
@@ -2627,6 +2585,18 @@ def download_transaction_id_summary():
                 
             if df_ack_main.empty:
                 continue
+
+            credit_counting_df, _ = credited_rows_for_totals(df_ack_main)
+            credit_counting_tid_series = credit_counting_df.iloc[:, 9].apply(
+                _identity_text
+            )
+            duplicate_details_by_transaction_id = {}
+            for detail in credit_counting_df.attrs.get(
+                'duplicate_credit_details', []
+            ):
+                duplicate_details_by_transaction_id.setdefault(
+                    detail['credited_transaction_id'], []
+                ).append(format_duplicate_credit_note(detail))
             
             # Collect all unique credited transaction IDs (column 9 only)
             all_trans_ids = set()
@@ -2662,52 +2632,18 @@ def download_transaction_id_summary():
                 bank_name_str = "; ".join(sorted(bank_names)) if bank_names else "N/A"
                 debited_trans_id_str = "; ".join(sorted(debited_trans_ids)) if debited_trans_ids else "None"
 
-                # Calculate credited amount with duplicate detection
-                total_credited = 0
-                duplicate_details = []
-                covered_keys = set()
-                
-                # Create a list to track all transactions for duplicate detection
-                all_transactions_for_duplicate_check = []
-                
-                for _, check_row in df_ack_main.iterrows():
-                    check_ack = str(check_row.iloc[1]).strip() if pd.notna(check_row.iloc[1]) else ''
-                    check_credited_acc = str(check_row.iloc[6]).strip() if pd.notna(check_row.iloc[6]) else ''
-                    check_credited_trans_id = str(check_row.iloc[9]).strip() if pd.notna(check_row.iloc[9]) else ''
-                    check_disputed_amt = clean_amount(check_row.iloc[11])
-                    
-                    if check_ack == current_ack and check_credited_trans_id == trans_id:
-                        all_transactions_for_duplicate_check.append({
-                            'ack': check_ack,
-                            'credited_acc_last4': get_last_4_digits(check_credited_acc),
-                            'credited_trans_id': check_credited_trans_id,
-                            'disputed_amt': check_disputed_amt,
-                            'full_row': check_row
-                        })
-
-                for _, row in credited_rows.iterrows():
-                    amt = clean_amount(row.iloc[11])
-                    current_acc_last4 = get_last_4_digits(row.iloc[6])
-
-                    duplicate_key = (current_ack, trans_id, f"{amt:.2f}", current_acc_last4)
-                    
-                    # Count how many times this combination appears
-                    duplicate_count = 0
-                    for trans in all_transactions_for_duplicate_check:
-                        if (trans['ack'] == current_ack and 
-                            trans['credited_trans_id'] == trans_id and 
-                            f"{trans['disputed_amt']:.2f}" == f"{amt:.2f}" and
-                            trans['credited_acc_last4'] == current_acc_last4):
-                            duplicate_count += 1
-                    
-                    if duplicate_key not in covered_keys:
-                        covered_keys.add(duplicate_key)
-                        total_credited += amt
-                        
-                        if duplicate_count > 1:
-                            duplicate_details.append(f"₹{amt:,.2f} (TID: {trans_id}, Last4: {current_acc_last4}, Count: {duplicate_count})")
-                    else:
-                        duplicate_details.append(f"₹{amt:,.2f} (Duplicate: TID: {trans_id}, Last4: {current_acc_last4})")
+                # Duplicate identities affect credited aggregation only.
+                transaction_key = _identity_text(trans_id)
+                credited_rows_for_total = credit_counting_df[
+                    credit_counting_tid_series == transaction_key
+                ]
+                total_credited = sum(
+                    clean_amount(row.iloc[11])
+                    for _, row in credited_rows_for_total.iterrows()
+                )
+                duplicate_details = duplicate_details_by_transaction_id.get(
+                    transaction_key, []
+                )
 
                 # Calculate outgoing/debited amount for the current credited transaction ID.
                 # This must come from child rows where the current transaction ID is used as
@@ -2728,12 +2664,13 @@ def download_transaction_id_summary():
                 for acc_no in credited_account_numbers:
                     breakdown_items.extend(get_transaction_breakdown(None, acc_no))
                 
-                # Deduplicate breakdown items by (sheet, amount)
-                seen_breakdown = set()
+                # Keep every distinct other-sheet row. A row may be reached by
+                # both lookups, so use its physical source identity as a join guard.
+                seen_source_rows = set()
                 for item in breakdown_items:
-                    key = (item['sheet'], item['amount'])
-                    if key not in seen_breakdown:
-                        seen_breakdown.add(key)
+                    key = (item['sheet'], item.get('row_idx', id(item)))
+                    if key not in seen_source_rows:
+                        seen_source_rows.add(key)
                         sheet = item['sheet']
                         amount = item['amount']
                         total_updated += amount

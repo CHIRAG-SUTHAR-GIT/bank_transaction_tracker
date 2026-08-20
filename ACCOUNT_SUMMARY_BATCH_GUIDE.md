@@ -37,6 +37,16 @@ Completed files are skipped on later runs. New files are discovered
 automatically. Changed files are recalculated and replaced in one database
 transaction, so incomplete results are not shown.
 
+Duplicate handling applies only to **Total Credited Amount**. A credited row is
+identified by acknowledgement number, credited transaction ID, and the last
+four characters of the credited account. Later rows with the same identity do
+not increase the credited total, but every source row remains available for
+debit totals and every distinct matching row from other sheets remains counted.
+
+The worker stores a summary-logic version in the local SQLite metadata. The
+first overnight run after this upgrade automatically queues previously
+completed files once, then returns to the normal changed-file-only behavior.
+
 ## Dashboard
 
 The dashboard opens with **All ACKs** selected. It supports:
